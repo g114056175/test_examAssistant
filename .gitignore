@@ -1,5 +1,4 @@
 config.ini
-llm_overlay.exe
 main.obj
 *.user
 *.log
