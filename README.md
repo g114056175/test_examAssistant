@@ -1,7 +1,22 @@
 # Helper
 
+Download the latest `llm_overlay.exe` directly from this repository:
+
+- [llm_overlay.exe](./llm_overlay.exe)
+
 Lightweight Win32 desktop helper for quick LLM queries from selected text or a screenshot region.  
 It shows a non-interactive overlay near the cursor and can keep working in the background without forcing the settings window to stay open.
+
+## Developer Note
+
+It just works.
+
+This is a small practice project made mostly for experimenting with AI-generated code and a lightweight desktop workflow.  
+The idea was simply to make something tiny that can stay in the background, quickly ask about highlighted text, and also handle screenshot-based questions without needing a big chat app UI.
+
+It is still a rough little tool, but it works well enough for everyday testing.  
+Prompt-1, Prompt-2, and Prompt-3 give different levels of reply depth, screenshot asking is supported, and most of the basic workflow is already there.  
+Some parts are still pretty unpolished, and the screenshot interaction is honestly a bit awkward, but overall it is a usable small project rather than a finished product.
 
 ## What It Can Do
 
@@ -53,17 +68,17 @@ When the field loses focus, it will auto-expand to:
 
 ## Default Hotkeys
 
-- `Ctrl+Q` Send selected text with Prompt-1
-- `Ctrl+W` Send selected text with Prompt-2
-- `Ctrl+E` Send selected text with Prompt-3
-- `Ctrl+R` Cancel current request
-- `Ctrl+Alt+1` Select Area
-- `Ctrl+Alt+2` Ask Image
-- `Alt+V` Toggle overlay visibility
+- `Ctrl+Q` Send the currently selected text with Prompt-1
+- `Ctrl+W` Send the currently selected text with Prompt-2
+- `Ctrl+E` Send the currently selected text with Prompt-3
+- `Ctrl+R` Cancel the current in-flight request and clear the request lock
+- `Ctrl+Alt+1` Start screenshot region selection, or cancel it if pressed again near the anchor point
+- `Ctrl+Alt+2` Confirm the selected screenshot region and ask the LLM about that image
+- `Alt+V` Show or hide the answer overlay
 - `Ctrl+Alt+Up` Increase overlay opacity
 - `Ctrl+Alt+Down` Decrease overlay opacity
-- `Ctrl+Alt+S` Show or hide settings
-- `Ctrl+Alt+X` Exit app
+- `Ctrl+Alt+S` Show or hide the settings window
+- `Ctrl+Alt+X` Exit the app
 
 ## Screenshot Flow
 

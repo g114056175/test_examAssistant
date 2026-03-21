@@ -9,7 +9,7 @@ static void ConfigDefaults(AppConfig *cfg) {
     strcpy(cfg->user_template, "{{text}}");
     cfg->overlay_enabled = 1;
     cfg->overlay_visible = 1;
-    cfg->opacity = 100;
+    cfg->opacity = 180;
     cfg->theme_light = 1;
     cfg->stream = 1;
     strcpy(cfg->hk_send, "Ctrl+Q");
