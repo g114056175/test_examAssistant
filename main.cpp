@@ -1,10 +1,14 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <commdlg.h>
 #include <winhttp.h>
 #include <wincrypt.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
 #include <objidl.h>
 #include <gdiplus.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,13 +18,16 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "crypt32.lib")
 
 #define APP_NAME "Helper"
 #define CONFIG_FILE "config.ini"
+#define MAX_REVIEW_MODELS 8
 
 #define HOTKEY_SEND_SELECTED  1
 #define HOTKEY_SEND_PROMPT2   4
@@ -33,6 +40,8 @@
 #define HOTKEY_EXIT_APP       9
 #define HOTKEY_CANCEL_REQ     10
 #define HOTKEY_SEND_PROMPT3   11
+#define HOTKEY_SCROLL_UP      12
+#define HOTKEY_SCROLL_DOWN    13
 
 #define ID_EDIT_PROMPT 401
 #define ID_BTN_SAVE 1
@@ -40,7 +49,7 @@
 #define ID_BTN_RESET 4
 #define ID_BTN_TAB_BASIC 360
 #define ID_BTN_TAB_ADV 361
-#define ID_THEME_COMBO 304
+#define ID_CHK_DARK_THEME 304
 #define ID_CHK_STREAM 305
 #define ID_HKCAP_PREVIEW 710
 #define ID_HKCAP_SAVE 711
@@ -68,6 +77,40 @@
 #define ID_LBL_SEND3 920
 #define ID_LBL_PROMPT2 921
 #define ID_LBL_PROMPT3 922
+#define ID_LBL_RAG 923
+#define ID_LBL_RAG_PATH 924
+#define ID_LBL_MULTI 925
+#define ID_LBL_PRIMARY_EP 926
+#define ID_LBL_PRIMARY_KEY 927
+#define ID_LBL_PRIMARY_MODEL 928
+#define ID_LBL_REVIEWER 929
+#define ID_LBL_SCROLLUP 930
+#define ID_LBL_SCROLLDOWN 931
+#define ID_LBL_MERGE1 932
+#define ID_LBL_MERGE2 933
+#define ID_LBL_MERGE3 934
+
+#define ID_CHK_RAG_ENABLED 306
+#define ID_EDIT_RAG_PATH 307
+#define ID_BTN_BROWSE_RAG 308
+#define ID_CHK_MULTI_LLM 309
+#define ID_EDIT_PRIMARY_EP 310
+#define ID_EDIT_PRIMARY_KEY 311
+#define ID_EDIT_PRIMARY_MODEL 312
+#define ID_BTN_TEST_PRIMARY 313
+#define ID_CMB_REVIEWER_SLOT 314
+#define ID_BTN_ADD_REVIEWER 315
+#define ID_BTN_REMOVE_REVIEWER 316
+#define ID_EDIT_REVIEWER_EP 317
+#define ID_EDIT_REVIEWER_KEY 318
+#define ID_EDIT_REVIEWER_MODEL 319
+#define ID_BTN_TEST_REVIEWER 320
+#define ID_EDIT_SIDE_PROMPT1 321
+#define ID_EDIT_SIDE_PROMPT2 322
+#define ID_EDIT_SIDE_PROMPT3 323
+#define ID_EDIT_MAIN_PROMPT1 324
+#define ID_EDIT_MAIN_PROMPT2 325
+#define ID_EDIT_MAIN_PROMPT3 326
 
 #define WM_APP_RESPONSE (WM_APP + 1)
 #define WM_APP_TRAY (WM_APP + 2)
@@ -82,6 +125,18 @@ typedef struct AppConfig {
     char prompt_2[1024];
     char prompt_3[1024];
     char user_template[2048];
+    int rag_enabled;
+    char rag_source_path[1024];
+    int ensemble_enabled;
+    char ensemble_primary_endpoint[512];
+    char ensemble_primary_api_key[256];
+    char ensemble_primary_model[128];
+    int ensemble_reviewer_count;
+    char ensemble_reviewer_endpoint[MAX_REVIEW_MODELS][512];
+    char ensemble_reviewer_api_key[MAX_REVIEW_MODELS][256];
+    char ensemble_reviewer_model[MAX_REVIEW_MODELS][128];
+    char ensemble_side_prompt[3][1024];
+    char ensemble_main_prompt[3][1024];
     int overlay_enabled;
     int overlay_visible;
     int opacity;
@@ -96,10 +151,19 @@ typedef struct AppConfig {
     char hk_toggle_visible[64];
     char hk_opacity_up[64];
     char hk_opacity_down[64];
+    char hk_scroll_up[64];
+    char hk_scroll_down[64];
     char hk_open_settings[64];
     char hk_exit[64];
     char hk_cancel[64];
 } AppConfig;
+
+typedef struct LlmTargetConfig {
+    char endpoint[512];
+    char api_key[256];
+    char model[128];
+    int stream;
+} LlmTargetConfig;
 
 typedef struct RequestPayload {
     char *user_text;
@@ -109,7 +173,26 @@ typedef struct RequestPayload {
     int from_ask;
     int req_id;
     char system_prompt[1024];
+    int use_target_override;
+    LlmTargetConfig target;
+    ULONGLONG start_ms;
 } RequestPayload;
+
+typedef struct RequestTiming {
+    ULONGLONG api_start_ms;
+    ULONGLONG send_done_ms;
+    ULONGLONG recv_done_ms;
+    ULONGLONG first_byte_ms;
+    ULONGLONG read_done_ms;
+    ULONGLONG done_ms;
+    ULONGLONG bytes_read;
+    ULONGLONG request_body_bytes;
+    ULONGLONG input_text_bytes;
+    int call_count;
+    int chunk_preview_count;
+    int chunk_preview_len;
+    char chunk_preview[2048];
+} RequestTiming;
 
 typedef struct ResponsePayload {
     char *text;
@@ -140,8 +223,8 @@ static HWND g_hwnd_main = NULL;
 static HWND g_hwnd_overlay = NULL;
 static HWND g_hwnd_capture = NULL;
 static HWND g_hwnd_settings = NULL;
-static char g_overlay_text[4096];
-static wchar_t g_overlay_text_w[4096];
+static char g_overlay_text[262144];
+static wchar_t g_overlay_text_w[262144];
 static char g_config_path[MAX_PATH] = CONFIG_FILE;
 static int g_have_tl = 0;
 static int g_have_br = 0;
@@ -162,6 +245,7 @@ static POINT g_wait_anchor = {0};
 static int g_wait_dots = 1;
 static char g_wait_prefix[2048] = "";
 static int g_loading_controls = 0;
+static int g_reviewer_edit_index = 0;
 static HWND g_hwnd_hotkey_capture = NULL;
 static HWND g_hwnd_hotkey_capture_owner = NULL;
 static int g_hotkey_capture_target_id = 0;
@@ -171,9 +255,13 @@ static int g_active_request_id = -1;
 static HINTERNET g_active_hrequest = NULL;
 static CRITICAL_SECTION g_req_cs;
 static ULONG_PTR g_gdiplus_token = 0;
+static int g_overlay_scroll_px = 0;
+static int g_overlay_content_height = 0;
 
 static void LoadConfig(AppConfig *cfg);
 static void SaveConfig(const AppConfig *cfg);
+static void SaveBasicConfig(const AppConfig *cfg);
+static void SaveAdvancedConfig(const AppConfig *cfg);
 static void RegisterHotkeys(HWND hwnd, const AppConfig *cfg);
 static void UnregisterHotkeys(HWND hwnd);
 static int ParseHotkey(const char *text, UINT *mod, UINT *vk);
@@ -186,7 +274,8 @@ static void CancelCaptureSelection(void);
 static int ConfirmCaptureSelection(POINT cursor, char *path, int path_size);
 static char *GetSelectedText(void);
 static unsigned __stdcall RequestThread(void *param);
-static char *SendLLMRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id);
+static char *SendLLMRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, RequestTiming *timing);
+static char *SendLLMRequestForTarget(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing);
 static char *ExtractDeltaContent(const char *json);
 static void StripThinkBlocks(char *text);
 static char *BuildUserMessage(const char *user_text, const char *region);
@@ -220,11 +309,19 @@ static void ApplyRuntimeHotkeysFromControls(HWND hwnd);
 static void ApplyRuntimeConfigFromControls(HWND hwnd);
 static void SyncSettingsUiFromRuntime(void);
 static void ShowCachedOverlayAt(POINT anchor);
+static void ScrollOverlayByStep(int direction);
 static int StepOpacityTier(int current, int direction);
 static void MoveCtrl(HWND hwnd, int id, int x, int y, int w, int h);
 static void ReleaseModifierKeys(void);
 static int HasVisibleText(const char *s);
 static void ShowWaitingOverlay(POINT anchor);
+static void UpdateRagControlsEnabled(HWND hwnd);
+static void BrowseRagSourcePath(HWND hwnd);
+static void UpdateMultiLlmControls(HWND hwnd);
+static void LoadReviewerEditor(HWND hwnd, int index);
+static void SaveReviewerEditor(HWND hwnd, int index);
+static void RefreshReviewerSlotCombo(HWND hwnd, int select_index);
+static void StartRequestExTarget(const char *text, const char *region, const char *image_path, POINT anchor, int from_ask, const char *system_prompt, const LlmTargetConfig *target);
 
 // config helpers split into module file
 #include "modules/config_module.inc.c"
@@ -346,6 +443,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             }
             SyncSettingsUiFromRuntime();
             break;
+        case HOTKEY_SCROLL_UP:
+            ScrollOverlayByStep(-1);
+            break;
+        case HOTKEY_SCROLL_DOWN:
+            ScrollOverlayByStep(+1);
+            break;
         case HOTKEY_OPEN_SETTINGS:
             if (!g_hwnd_settings) break;
             if (IsWindowVisible(g_hwnd_settings)) {
@@ -438,9 +541,11 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow) {
     Gdiplus::GdiplusStartupInput gdiplus_input;
+    HRESULT coinit_hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     g_singleton_mutex = CreateMutexA(NULL, TRUE, "LLMOverlayHelperSingleton");
     if (g_singleton_mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBoxA(NULL, "Helper is already running.", "Helper", MB_OK | MB_ICONINFORMATION);
+        if (SUCCEEDED(coinit_hr)) CoUninitialize();
         CloseHandle(g_singleton_mutex);
         return 0;
     }
@@ -451,6 +556,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
             CloseHandle(g_singleton_mutex);
             g_singleton_mutex = NULL;
         }
+        if (SUCCEEDED(coinit_hr)) CoUninitialize();
         return 0;
     }
 
@@ -480,6 +586,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nC
     if (g_gdiplus_token) {
         Gdiplus::GdiplusShutdown(g_gdiplus_token);
         g_gdiplus_token = 0;
+    }
+    if (SUCCEEDED(coinit_hr)) {
+        CoUninitialize();
     }
     DeleteCriticalSection(&g_req_cs);
     return 0;

@@ -8,6 +8,19 @@ static void CacheOverlayText(const char *text) {
     }
 }
 
+static void NormalizeOverlayTextForWrap(const char *src, char *dst, int dst_size) {
+    int i = 0;
+    if (!dst || dst_size <= 0) return;
+    dst[0] = 0;
+    if (!src) return;
+    while (*src && i < dst_size - 1) {
+        char c = *src++;
+        if (c == '\r') continue;
+        dst[i++] = c;
+    }
+    dst[i] = 0;
+}
+
 static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
     case WM_NCHITTEST:
@@ -18,6 +31,7 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
+        RECT text_rc;
         GetClientRect(hwnd, &rc);
         COLORREF bgc = g_cfg.theme_light ? RGB(250, 250, 250) : RGB(20, 20, 20);
         COLORREF fgc = g_cfg.theme_light ? RGB(15, 15, 15) : RGB(230, 230, 230);
@@ -26,7 +40,11 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         DeleteObject(bg);
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, fgc);
-        DrawTextW(hdc, g_overlay_text_w, -1, &rc, DT_LEFT | DT_TOP | DT_WORDBREAK);
+        text_rc.left = 10;
+        text_rc.top = 10 - g_overlay_scroll_px;
+        text_rc.right = rc.right - 10;
+        text_rc.bottom = text_rc.top + g_overlay_content_height + 20;
+        DrawTextW(hdc, g_overlay_text_w, -1, &text_rc, DT_LEFT | DT_TOP | DT_WORDBREAK);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -53,15 +71,31 @@ static void EnsureOverlayWindow(HWND hwnd_parent) {
 }
 
 static void ShowOverlayText(const char *text, POINT anchor) {
-    CacheOverlayText(text);
+    char wrapped[262144];
+    int width;
+    int content_height;
+    RECT rc;
+    RECT rc2;
+    NormalizeOverlayTextForWrap(text ? text : "", wrapped, (int)sizeof(wrapped));
+    CacheOverlayText(wrapped);
     if (!g_cfg.overlay_visible) return;
     EnsureOverlayWindow(g_hwnd_main);
     HDC hdc = GetDC(g_hwnd_overlay);
-    RECT rc = {0, 0, 480, 9999};
+    rc.left = 0;
+    rc.top = 0;
+    rc.right = 460;
+    rc.bottom = 200000;
     DrawTextW(hdc, g_overlay_text_w, -1, &rc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
+    width = ClampInt((rc.right - rc.left) + 20, 220, 480);
+    rc2.left = 0;
+    rc2.top = 0;
+    rc2.right = width - 20;
+    rc2.bottom = 200000;
+    DrawTextW(hdc, g_overlay_text_w, -1, &rc2, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
     ReleaseDC(g_hwnd_overlay, hdc);
-    int width = ClampInt(rc.right - rc.left + 20, 220, 480);
-    int height = ClampInt(rc.bottom - rc.top + 20, 60, 600);
+    content_height = rc2.bottom - rc2.top;
+    int height = ClampInt(content_height + 20, 60, 600);
+    g_overlay_content_height = content_height;
     int x = anchor.x + 16;
     int y = anchor.y + 16;
     int sx = GetSystemMetrics(SM_CXSCREEN);
@@ -79,4 +113,21 @@ static void HideOverlay(void) {
 static void ShowCachedOverlayAt(POINT anchor) {
     if (g_overlay_text[0]) ShowOverlayText(g_overlay_text, anchor);
     else ShowOverlayText("(No response yet)", anchor);
+}
+
+static void ScrollOverlayByStep(int direction) {
+    RECT rc;
+    int visible_h;
+    int max_scroll;
+    if (!g_hwnd_overlay || !IsWindow(g_hwnd_overlay)) return;
+    if (!g_cfg.overlay_visible) return;
+    GetClientRect(g_hwnd_overlay, &rc);
+    visible_h = (rc.bottom - rc.top) - 20;
+    if (visible_h < 20) visible_h = 20;
+    max_scroll = g_overlay_content_height - visible_h;
+    if (max_scroll < 0) max_scroll = 0;
+    g_overlay_scroll_px += direction * 56;
+    if (g_overlay_scroll_px < 0) g_overlay_scroll_px = 0;
+    if (g_overlay_scroll_px > max_scroll) g_overlay_scroll_px = max_scroll;
+    InvalidateRect(g_hwnd_overlay, NULL, TRUE);
 }

@@ -41,19 +41,212 @@ static char *ReadFileBase64(const char *path) {
     return out;
 }
 
-static char *BuildImageUserMessage(void) {
-    char *msg = BuildUserMessage("", "");
+static int HasSupportedRagExtensionW(const wchar_t *name) {
+    const wchar_t *dot = wcsrchr(name, L'.');
+    if (!dot) return 0;
+    return _wcsicmp(dot, L".txt") == 0 || _wcsicmp(dot, L".md") == 0;
+}
+
+static int AppendTextWithCap(char **buf, size_t *len, size_t *cap, const char *text, size_t text_len, size_t max_total) {
+    if (!buf || !len || !cap || !text) return 0;
+    if (*len >= max_total) return 1;
+    if (*len + text_len + 1 > max_total) {
+        text_len = max_total - *len - 1;
+    }
+    if (*len + text_len + 1 > *cap) {
+        size_t new_cap = *cap ? *cap : 1024;
+        while (*len + text_len + 1 > new_cap) new_cap *= 2;
+        char *n = (char *)realloc(*buf, new_cap);
+        if (!n) return 0;
+        *buf = n;
+        *cap = new_cap;
+    }
+    memcpy(*buf + *len, text, text_len);
+    *len += text_len;
+    (*buf)[*len] = 0;
+    return 1;
+}
+
+static int ReadUtf8TextFileW(const wchar_t *path, char **out) {
+    HANDLE file;
+    LARGE_INTEGER size_li;
+    DWORD read = 0;
+    BYTE *bytes = NULL;
+    char *utf8 = NULL;
+    if (!out) return 0;
+    *out = NULL;
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!GetFileSizeEx(file, &size_li) || size_li.QuadPart <= 0 || size_li.QuadPart > 1024 * 1024) {
+        CloseHandle(file);
+        return 0;
+    }
+    bytes = (BYTE *)malloc((size_t)size_li.QuadPart + 2);
+    if (!bytes) {
+        CloseHandle(file);
+        return 0;
+    }
+    if (!ReadFile(file, bytes, (DWORD)size_li.QuadPart, &read, NULL) || read != (DWORD)size_li.QuadPart) {
+        CloseHandle(file);
+        free(bytes);
+        return 0;
+    }
+    CloseHandle(file);
+    bytes[read] = 0;
+    bytes[read + 1] = 0;
+    if (read >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        const wchar_t *wsrc = (const wchar_t *)(bytes + 2);
+        int need = WideCharToMultiByte(CP_UTF8, 0, wsrc, -1, NULL, 0, NULL, NULL);
+        if (need > 0) {
+            utf8 = (char *)malloc(need);
+            if (utf8) WideCharToMultiByte(CP_UTF8, 0, wsrc, -1, utf8, need, NULL, NULL);
+        }
+    } else if (read >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        utf8 = _strdup((const char *)(bytes + 3));
+    } else {
+        int wneed = MultiByteToWideChar(CP_ACP, 0, (const char *)bytes, -1, NULL, 0);
+        if (wneed > 0) {
+            wchar_t *wtmp = (wchar_t *)malloc(sizeof(wchar_t) * wneed);
+            if (wtmp && MultiByteToWideChar(CP_ACP, 0, (const char *)bytes, -1, wtmp, wneed) > 0) {
+                int need = WideCharToMultiByte(CP_UTF8, 0, wtmp, -1, NULL, 0, NULL, NULL);
+                if (need > 0) {
+                    utf8 = (char *)malloc(need);
+                    if (utf8) WideCharToMultiByte(CP_UTF8, 0, wtmp, -1, utf8, need, NULL, NULL);
+                }
+            }
+            free(wtmp);
+        }
+        if (!utf8) utf8 = _strdup((const char *)bytes);
+    }
+    free(bytes);
+    *out = utf8;
+    return utf8 != NULL;
+}
+
+static void CollectRagTextFromPathW(const wchar_t *path, char **buf, size_t *len, size_t *cap, int depth) {
+    DWORD attr;
+    if (!path || !path[0] || !buf || !len || !cap || depth > 3 || *len >= 12000) return;
+    attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES) return;
+    if (attr & FILE_ATTRIBUTE_DIRECTORY) {
+        wchar_t pattern[MAX_PATH];
+        WIN32_FIND_DATAW fd;
+        HANDLE hfind;
+        swprintf(pattern, MAX_PATH, L"%ls\\*", path);
+        hfind = FindFirstFileW(pattern, &fd);
+        if (hfind == INVALID_HANDLE_VALUE) return;
+        do {
+            wchar_t child[MAX_PATH];
+            if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+            swprintf(child, MAX_PATH, L"%ls\\%ls", path, fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                CollectRagTextFromPathW(child, buf, len, cap, depth + 1);
+            } else if (HasSupportedRagExtensionW(fd.cFileName)) {
+                CollectRagTextFromPathW(child, buf, len, cap, depth + 1);
+            }
+        } while (FindNextFileW(hfind, &fd));
+        FindClose(hfind);
+        return;
+    }
+    if (!HasSupportedRagExtensionW(path)) return;
+    {
+        char *file_text = NULL;
+        char path_utf8[1024];
+        const char *base_name;
+        if (!ReadUtf8TextFileW(path, &file_text) || !file_text || !file_text[0]) {
+            free(file_text);
+            return;
+        }
+        if (!WideToUtf8(path, path_utf8, sizeof(path_utf8))) {
+            free(file_text);
+            return;
+        }
+        base_name = strrchr(path_utf8, '\\');
+        if (!base_name) base_name = path_utf8; else base_name++;
+        AppendTextWithCap(buf, len, cap, "\n[Source: ", 10, 12000);
+        AppendTextWithCap(buf, len, cap, base_name, strlen(base_name), 12000);
+        AppendTextWithCap(buf, len, cap, "]\n", 2, 12000);
+        AppendTextWithCap(buf, len, cap, file_text, strlen(file_text), 12000);
+        AppendTextWithCap(buf, len, cap, "\n", 1, 12000);
+        free(file_text);
+    }
+}
+
+static char *LoadRagReferenceText(void) {
+    wchar_t path_w[1024];
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    if (!g_cfg.rag_enabled || !g_cfg.rag_source_path[0]) return NULL;
+    if (!Utf8ToWide(g_cfg.rag_source_path, path_w, (int)(sizeof(path_w) / sizeof(path_w[0])))) return NULL;
+    CollectRagTextFromPathW(path_w, &buf, &len, &cap, 0);
+    if (!buf || !buf[0]) {
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+static char *BuildRagUserMessage(const char *base_msg) {
+    char *rag_text = LoadRagReferenceText();
+    char *out;
+    if (!rag_text || !rag_text[0]) {
+        free(rag_text);
+        return _strdup(base_msg ? base_msg : "");
+    }
+    out = DupPrintf("Please answer using the reference data when relevant.\n"
+                    "If the reference data directly contains the answer, prioritize it.\n"
+                    "If the reference data is insufficient, say the reference data is insufficient.\n"
+                    "\nReference data:\n%s\n\nQuestion:\n%s",
+                    rag_text,
+                    base_msg ? base_msg : "");
+    free(rag_text);
+    return out;
+}
+
+static int DetectPromptSlot(const char *system_prompt) {
+    if (!system_prompt || !system_prompt[0]) return 0;
+    if (strcmp(system_prompt, g_cfg.prompt_2) == 0) return 1;
+    if (strcmp(system_prompt, g_cfg.prompt_3) == 0) return 2;
+    return 0;
+}
+
+static void SetMultiWaitStatusText(char *buf, size_t buf_size, const char *main_status, const char reviewer_status[][16], const int reviewer_slots[], int reviewer_count) {
+    size_t used = 0;
+    if (!buf || buf_size == 0) return;
+    used += snprintf(buf + used, buf_size - used, "main: %s", main_status ? main_status : "wait");
+    for (int i = 0; i < reviewer_count && used + 24 < buf_size; ++i) {
+        int slot = (reviewer_slots && reviewer_slots[i] >= 0) ? (reviewer_slots[i] + 1) : (i + 1);
+        used += snprintf(buf + used, buf_size - used, "\nside-%d: %s", slot, reviewer_status[i][0] ? reviewer_status[i] : "wait");
+    }
+}
+
+static int IsLikelyRequestError(const char *text) {
+    if (!text || !text[0]) return 1;
+    return strncmp(text, "HTTP ", 5) == 0 ||
+           strstr(text, "failed") != NULL ||
+           strstr(text, "Invalid endpoint") != NULL ||
+           strstr(text, "WinHttp") != NULL;
+}
+
+static char *BuildImageUserMessage(const char *base_text) {
+    char *msg = BuildUserMessage(base_text ? base_text : "", "");
     if (!msg) return NULL;
     if (!HasVisibleText(msg)) {
         free(msg);
-        return _strdup("Please analyze the attached screenshot and answer based on the visible content.");
+        msg = _strdup("Please analyze the attached screenshot and answer based on the visible content.");
+        if (!msg) return NULL;
     }
-    return msg;
+    {
+        char *with_rag = BuildRagUserMessage(msg);
+        free(msg);
+        return with_rag;
+    }
 }
 
 static char *BuildUserMessage(const char *user_text, const char *region) {
+    char *templated;
     if (region && strcmp(region, "__RAW__") == 0) {
-        return _strdup(user_text ? user_text : "");
+        return BuildRagUserMessage(user_text ? user_text : "");
     }
     const char *tpl = g_cfg.user_template;
     size_t out_cap = strlen(tpl) + (user_text ? strlen(user_text) : 0) + (region ? strlen(region) : 0) + 64;
@@ -75,7 +268,9 @@ static char *BuildUserMessage(const char *user_text, const char *region) {
             p++;
         }
     }
-    return out;
+    templated = BuildRagUserMessage(out);
+    free(out);
+    return templated;
 }
 
 static char *JsonEscape(const char *s) {
@@ -151,17 +346,417 @@ static void StripThinkBlocks(char *text) {
     }
 }
 
-static char *SendLLMRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id) {
+static void NormalizePlainTextOutput(char *text) {
+    char *src;
+    char *dst;
+    int line_start = 1;
+    if (!text || !text[0]) return;
+    src = text;
+    dst = text;
+    while (*src) {
+        if (src[0] == '*' && src[1] == '*') {
+            src += 2;
+            continue;
+        }
+        if (src[0] == '_' && src[1] == '_') {
+            src += 2;
+            continue;
+        }
+        if (src[0] == '`') {
+            src++;
+            continue;
+        }
+        if (line_start) {
+            while (*src == '#') src++;
+            if (src[0] == '-' && src[1] == ' ') src += 2;
+        }
+        *dst = *src;
+        line_start = (*src == '\n' || *src == '\r') ? 1 : 0;
+        dst++;
+        src++;
+    }
+    *dst = 0;
+}
+
+static int IsUsableModelAnswer(const char *text) {
+    if (!text || !text[0]) return 0;
+    if (IsLikelyRequestError(text)) return 0;
+    if (strstr(text, "LLM response had no content field.") != NULL) return 0;
+    return HasVisibleText(text);
+}
+
+static void DetermineModelStatus(const char *text, char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = 0;
+    if (!text || !text[0]) {
+        strncpy(out, "err", out_size - 1);
+        out[out_size - 1] = 0;
+        return;
+    }
+    if (strstr(text, "WinHTTP 12002") != NULL) {
+        strncpy(out, "timeout", out_size - 1);
+        out[out_size - 1] = 0;
+        return;
+    }
+    if (IsLikelyRequestError(text) || strstr(text, "LLM response had no content field.") != NULL) {
+        strncpy(out, "err", out_size - 1);
+        out[out_size - 1] = 0;
+        return;
+    }
+    strncpy(out, "done", out_size - 1);
+    out[out_size - 1] = 0;
+}
+
+typedef struct EnsembleCallTask {
+    LlmTargetConfig target;
+    const char *user_text;
+    const char *region;
+    const char *image_path;
+    const char *system_prompt;
+    int req_id;
+    int recv_timeout_ms;
+    RequestTiming *timing;
+    char *answer;
+    char status[16];
+    int usable;
+} EnsembleCallTask;
+
+static char *QueryEnsembleTarget(const LlmTargetConfig *target, const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, int *used_image, RequestTiming *timing, int recv_timeout_ms);
+
+static unsigned __stdcall EnsembleCallThread(void *param) {
+    EnsembleCallTask *task = (EnsembleCallTask *)param;
+    if (!task) return 0;
+    task->answer = QueryEnsembleTarget(&task->target,
+                                       task->user_text,
+                                       task->region,
+                                       task->image_path,
+                                       task->system_prompt,
+                                       task->req_id,
+                                       NULL,
+                                       task->timing,
+                                       task->recv_timeout_ms);
+    if (!task->answer) task->answer = _strdup("Model did not return a result.");
+    task->usable = IsUsableModelAnswer(task->answer);
+    DetermineModelStatus(task->answer, task->status, sizeof(task->status));
+    return 0;
+}
+
+static void ResolveTargetConfig(LlmTargetConfig *out, const LlmTargetConfig *target) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (target && target->endpoint[0] && target->model[0]) {
+        *out = *target;
+        return;
+    }
+    strncpy(out->endpoint, g_cfg.endpoint, sizeof(out->endpoint) - 1);
+    strncpy(out->api_key, g_cfg.api_key, sizeof(out->api_key) - 1);
+    strncpy(out->model, g_cfg.model, sizeof(out->model) - 1);
+    out->stream = g_cfg.stream;
+}
+
+static void ResolvePrimaryEnsembleTarget(LlmTargetConfig *target) {
+    ResolveTargetConfig(target, NULL);
+    if (g_cfg.ensemble_primary_endpoint[0]) {
+        strncpy(target->endpoint, g_cfg.ensemble_primary_endpoint, sizeof(target->endpoint) - 1);
+        target->endpoint[sizeof(target->endpoint) - 1] = 0;
+    }
+    if (g_cfg.ensemble_primary_api_key[0]) {
+        strncpy(target->api_key, g_cfg.ensemble_primary_api_key, sizeof(target->api_key) - 1);
+        target->api_key[sizeof(target->api_key) - 1] = 0;
+    }
+    if (g_cfg.ensemble_primary_model[0]) {
+        strncpy(target->model, g_cfg.ensemble_primary_model, sizeof(target->model) - 1);
+        target->model[sizeof(target->model) - 1] = 0;
+    }
+    target->stream = 0;
+}
+
+static int FillReviewerTarget(int index, LlmTargetConfig *target) {
+    if (!target || index < 0 || index >= g_cfg.ensemble_reviewer_count) return 0;
+    memset(target, 0, sizeof(*target));
+    strncpy(target->endpoint, g_cfg.ensemble_reviewer_endpoint[index], sizeof(target->endpoint) - 1);
+    strncpy(target->api_key, g_cfg.ensemble_reviewer_api_key[index], sizeof(target->api_key) - 1);
+    strncpy(target->model, g_cfg.ensemble_reviewer_model[index], sizeof(target->model) - 1);
+    target->stream = 0;
+    return target->endpoint[0] && target->model[0];
+}
+
+static char *SendLLMRequestForTargetWithTimeout(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing, int recv_timeout_ms);
+static char *QueryEnsembleTarget(const LlmTargetConfig *target, const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, int *used_image, RequestTiming *timing, int recv_timeout_ms);
+
+static char *QueryEnsembleTarget(const LlmTargetConfig *target, const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, int *used_image, RequestTiming *timing, int recv_timeout_ms) {
+    char *result = NULL;
+    if (used_image) *used_image = (image_path && image_path[0]) ? 1 : 0;
+    result = SendLLMRequestForTargetWithTimeout(user_text, region, image_path, system_prompt, req_id, target, timing, recv_timeout_ms);
+    if (image_path && image_path[0] && IsLikelyRequestError(result)) {
+        free(result);
+        if (used_image) *used_image = 0;
+        if (user_text && user_text[0]) {
+            result = SendLLMRequestForTargetWithTimeout(user_text, region, "", system_prompt, req_id, target, timing, recv_timeout_ms);
+        } else {
+            result = _strdup("Skipped image-only request because this model may not support images.");
+        }
+    }
+    return result;
+}
+
+static char *RunEnsembleRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, RequestTiming *timing) {
+    const int side_timeout_ms = 45000;
+    const int merge_timeout_ms = 60000;
+    LlmTargetConfig primary;
+    int reviewer_slots[MAX_REVIEW_MODELS];
+    int reviewer_active_count = 0;
+    int reviewer_usable[MAX_REVIEW_MODELS] = {0};
+    int primary_usable = 0;
+    char *primary_answer = NULL;
+    char *review_answers[MAX_REVIEW_MODELS] = {0};
+    char *review_summary = NULL;
+    char *final_prompt = NULL;
+    char *final_answer = NULL;
+    char status_text[2048];
+    char reviewer_status[MAX_REVIEW_MODELS][16] = {{0}};
+    char main_status[16] = "wait";
+    int prompt_slot = DetectPromptSlot(system_prompt);
+    const char *side_prompt = (system_prompt && system_prompt[0]) ? system_prompt : g_cfg.system_prompt;
+    const char *main_prompt = g_cfg.ensemble_main_prompt[prompt_slot];
+    EnsembleCallTask tasks[MAX_REVIEW_MODELS + 1];
+    HANDLE handles[MAX_REVIEW_MODELS + 1] = {0};
+    int task_count = 0;
+    size_t summary_cap = 2048, summary_len = 0;
+    for (int i = 0; i < g_cfg.ensemble_reviewer_count && reviewer_active_count < MAX_REVIEW_MODELS; ++i) {
+        if (IsReviewerUsableAt(&g_cfg, i)) {
+            reviewer_slots[reviewer_active_count++] = i;
+        }
+    }
+    ResolvePrimaryEnsembleTarget(&primary);
+    if (!primary.endpoint[0] || !primary.model[0]) {
+        return DupPrintf("Multi-LLM is enabled, but the primary model config is incomplete.");
+    }
+    SetMultiWaitStatusText(status_text, sizeof(status_text), main_status, reviewer_status, reviewer_slots, reviewer_active_count);
+    strncpy(g_wait_prefix, status_text, sizeof(g_wait_prefix) - 1);
+    g_wait_prefix[sizeof(g_wait_prefix) - 1] = 0;
+    memset(tasks, 0, sizeof(tasks));
+
+    tasks[task_count].target = primary;
+    tasks[task_count].user_text = user_text;
+    tasks[task_count].region = region;
+    tasks[task_count].image_path = image_path;
+    tasks[task_count].system_prompt = side_prompt;
+    tasks[task_count].req_id = req_id;
+    tasks[task_count].recv_timeout_ms = side_timeout_ms;
+    tasks[task_count].timing = timing;
+    handles[task_count] = (HANDLE)_beginthreadex(NULL, 0, EnsembleCallThread, &tasks[task_count], 0, NULL);
+    task_count++;
+
+    for (int i = 0; i < reviewer_active_count; ++i) {
+        LlmTargetConfig reviewer;
+        if (!FillReviewerTarget(reviewer_slots[i], &reviewer)) continue;
+        tasks[task_count].target = reviewer;
+        tasks[task_count].user_text = user_text;
+        tasks[task_count].region = region;
+        tasks[task_count].image_path = image_path;
+        tasks[task_count].system_prompt = side_prompt;
+        tasks[task_count].req_id = req_id;
+        tasks[task_count].recv_timeout_ms = side_timeout_ms;
+        tasks[task_count].timing = timing;
+        handles[task_count] = (HANDLE)_beginthreadex(NULL, 0, EnsembleCallThread, &tasks[task_count], 0, NULL);
+        task_count++;
+    }
+
+    for (int i = 0; i < task_count; ++i) {
+        if (handles[i]) {
+            WaitForSingleObject(handles[i], INFINITE);
+            CloseHandle(handles[i]);
+        }
+    }
+
+    primary_answer = tasks[0].answer ? tasks[0].answer : _strdup("Primary model did not return a result.");
+    tasks[0].answer = NULL;
+    primary_usable = IsUsableModelAnswer(primary_answer);
+    DetermineModelStatus(primary_answer, main_status, sizeof(main_status));
+
+    for (int i = 0; i < reviewer_active_count; ++i) {
+        int ti = i + 1;
+        if (ti < task_count) {
+            review_answers[i] = tasks[ti].answer ? tasks[ti].answer : _strdup("Reviewer did not return a result.");
+            tasks[ti].answer = NULL;
+            reviewer_usable[i] = IsUsableModelAnswer(review_answers[i]);
+            DetermineModelStatus(review_answers[i], reviewer_status[i], sizeof(reviewer_status[i]));
+        } else {
+            review_answers[i] = _strdup("Reviewer was not started.");
+            reviewer_usable[i] = 0;
+            strcpy(reviewer_status[i], "err");
+        }
+    }
+
+    SetMultiWaitStatusText(status_text, sizeof(status_text), main_status, reviewer_status, reviewer_slots, reviewer_active_count);
+    strncpy(g_wait_prefix, status_text, sizeof(g_wait_prefix) - 1);
+    g_wait_prefix[sizeof(g_wait_prefix) - 1] = 0;
+    review_summary = (char *)malloc(summary_cap);
+    if (!review_summary) {
+        free(primary_answer);
+        return _strdup("Failed to allocate ensemble buffer.");
+    }
+    review_summary[0] = 0;
+    summary_len = 0;
+    {
+        const char *label = "Primary answer:\n";
+        AppendTextWithCap(&review_summary, &summary_len, &summary_cap, label, strlen(label), 24000);
+        if (primary_usable) {
+            AppendTextWithCap(&review_summary, &summary_len, &summary_cap, primary_answer, strlen(primary_answer), 24000);
+        } else {
+            AppendTextWithCap(&review_summary, &summary_len, &summary_cap, "(unavailable)", 13, 24000);
+        }
+        AppendTextWithCap(&review_summary, &summary_len, &summary_cap, "\n\n", 2, 24000);
+    }
+    for (int i = 0; i < reviewer_active_count; ++i) {
+        char header[64];
+        snprintf(header, sizeof(header), "Side %d answer:\n", reviewer_slots[i] + 1);
+        AppendTextWithCap(&review_summary, &summary_len, &summary_cap, header, strlen(header), 24000);
+        if (reviewer_usable[i]) {
+            AppendTextWithCap(&review_summary, &summary_len, &summary_cap, review_answers[i], strlen(review_answers[i]), 24000);
+        } else {
+            AppendTextWithCap(&review_summary, &summary_len, &summary_cap, "(unavailable)", 13, 24000);
+        }
+        AppendTextWithCap(&review_summary, &summary_len, &summary_cap, "\n\n", 2, 24000);
+    }
+    final_prompt = DupPrintf(
+        "Question:\n%s\n\n"
+        "Candidate answers from multiple models:\n%s\n"
+        "Please produce:\n"
+        "1. Best final answer\n"
+        "2. If there is disagreement, mark it clearly\n"
+        "3. Briefly mention the likely alternative if needed\n"
+        "4. Keep the answer concise\n",
+        user_text ? user_text : "",
+        review_summary ? review_summary : "");
+    {
+        char participants[256] = "";
+        int first = 1;
+        for (int i = 0; i < reviewer_active_count; ++i) {
+            if (!reviewer_usable[i]) continue;
+            char seg[24];
+            snprintf(seg, sizeof(seg), first ? "side%d" : ",side%d", reviewer_slots[i] + 1);
+            first = 0;
+            strncat(participants, seg, sizeof(participants) - strlen(participants) - 1);
+        }
+        if (!participants[0]) strcpy(participants, "primary");
+        snprintf(main_status, sizeof(main_status), "merge");
+        snprintf(status_text, sizeof(status_text), "merge %s\nwait...", participants);
+        strncpy(g_wait_prefix, status_text, sizeof(g_wait_prefix) - 1);
+        g_wait_prefix[sizeof(g_wait_prefix) - 1] = 0;
+    }
+    final_answer = QueryEnsembleTarget(&primary, final_prompt, "__RAW__", image_path, main_prompt, req_id, NULL, timing, merge_timeout_ms);
+    if (!IsUsableModelAnswer(final_answer)) {
+        free(final_answer);
+        final_answer = NULL;
+        for (int i = 0; i < reviewer_active_count; ++i) {
+            LlmTargetConfig fallback_target;
+            if (!reviewer_usable[i]) continue;
+            if (!FillReviewerTarget(reviewer_slots[i], &fallback_target)) continue;
+            final_answer = QueryEnsembleTarget(&fallback_target, final_prompt, "__RAW__", image_path, main_prompt, req_id, NULL, timing, merge_timeout_ms);
+            if (IsUsableModelAnswer(final_answer)) break;
+            free(final_answer);
+            final_answer = NULL;
+        }
+    }
+    if (!final_answer) {
+        for (int i = 0; i < reviewer_active_count; ++i) {
+            if (reviewer_usable[i] && review_answers[i]) {
+                final_answer = _strdup(review_answers[i]);
+                break;
+            }
+        }
+    }
+    if (!final_answer) final_answer = _strdup(primary_usable ? primary_answer : "Multi-LLM aggregation failed: no usable model response.");
+    for (int i = 0; i < MAX_REVIEW_MODELS; ++i) free(review_answers[i]);
+    free(primary_answer);
+    free(review_summary);
+    free(final_prompt);
+    return final_answer;
+}
+
+static void AppendChunkPreview(RequestTiming *timing, const char *buf, DWORD read) {
+    int i;
+    int take;
+    int col = 0;
+    if (!timing || !buf || read == 0) return;
+    if (timing->chunk_preview_count >= 3) return;
+    if (timing->chunk_preview_len >= (int)sizeof(timing->chunk_preview) - 32) return;
+    take = (int)read;
+    if (take > 120) take = 120;
+    timing->chunk_preview_len += snprintf(
+        timing->chunk_preview + timing->chunk_preview_len,
+        sizeof(timing->chunk_preview) - timing->chunk_preview_len,
+        "\n[ch%d] ",
+        timing->chunk_preview_count + 1);
+    for (i = 0; i < take && timing->chunk_preview_len < (int)sizeof(timing->chunk_preview) - 1; ++i) {
+        unsigned char c = (unsigned char)buf[i];
+        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+        if (c < 32) c = '.';
+        timing->chunk_preview[timing->chunk_preview_len++] = (char)c;
+        col++;
+        if ((c == ',' || c == ':' || c == ']' || c == '}') && timing->chunk_preview_len < (int)sizeof(timing->chunk_preview) - 1) {
+            timing->chunk_preview[timing->chunk_preview_len++] = ' ';
+            col++;
+        }
+        if (col >= 82 && timing->chunk_preview_len < (int)sizeof(timing->chunk_preview) - 6) {
+            timing->chunk_preview[timing->chunk_preview_len++] = '\n';
+            timing->chunk_preview[timing->chunk_preview_len++] = ' ';
+            timing->chunk_preview[timing->chunk_preview_len++] = ' ';
+            col = 0;
+        }
+    }
+    timing->chunk_preview[timing->chunk_preview_len] = 0;
+    timing->chunk_preview_count++;
+}
+
+static int StreamChunkIndicatesDone(const char *text) {
+    const char *p;
+    if (!text || !text[0]) return 0;
+    if (strstr(text, "[DONE]") != NULL) return 1;
+    p = text;
+    while ((p = strstr(p, "\"finish_reason\"")) != NULL) {
+        const char *q = strchr(p, ':');
+        if (!q) break;
+        q++;
+        while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') q++;
+        if (_strnicmp(q, "null", 4) != 0) return 1;
+        p = q;
+    }
+    return 0;
+}
+
+static int ShouldRetryWithoutStream(const char *result) {
+    if (!result || !result[0]) return 1;
+    if (strstr(result, "LLM response had no content field.") != NULL) return 1;
+    if (strstr(result, "data: {") != NULL) return 1;
+    if (strstr(result, "chat.completion.chunk") != NULL) return 1;
+    if (IsLikelyRequestError(result)) return 1;
+    return 0;
+}
+
+static char *SendLLMRequestForTargetOnce(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing, int recv_timeout_ms) {
     ProviderRequestInfo provider;
     int use_stream;
     char endpoint[512];
-    strncpy(endpoint, g_cfg.endpoint, sizeof(endpoint) - 1);
+    LlmTargetConfig resolved;
+    const char *api_key;
+    const char *model;
+    ResolveTargetConfig(&resolved, target);
+    if (timing) {
+        if (timing->api_start_ms == 0) timing->api_start_ms = GetTickCount64();
+        timing->call_count++;
+    }
+    strncpy(endpoint, resolved.endpoint, sizeof(endpoint) - 1);
     endpoint[sizeof(endpoint) - 1] = 0;
-    ResolveProviderRequestInfo(&provider, endpoint, g_cfg.api_key, g_cfg.model, g_cfg.stream);
+    api_key = resolved.api_key;
+    model = resolved.model;
+    ResolveProviderRequestInfo(&provider, endpoint, api_key, model, resolved.stream);
     strncpy(endpoint, provider.endpoint, sizeof(endpoint) - 1);
     endpoint[sizeof(endpoint) - 1] = 0;
     use_stream = provider.use_stream;
-    char *user_msg = image_path && image_path[0] ? BuildImageUserMessage() : BuildUserMessage(user_text, region);
+    char *user_msg = image_path && image_path[0] ? BuildImageUserMessage(user_text) : BuildUserMessage(user_text, region);
     if (!user_msg) return NULL;
     char system_all[1600];
     snprintf(system_all, sizeof(system_all),
@@ -177,6 +772,9 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
         return NULL;
     }
     char *body = NULL;
+    if (timing) {
+        if (user_text) timing->input_text_bytes += (ULONGLONG)strlen(user_text);
+    }
     if (image_path && image_path[0]) {
         size_t body_cap;
         char *img_url_esc;
@@ -186,7 +784,7 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
             free(user_esc);
             return DupPrintf("Failed to read screenshot: %s", image_path);
         }
-        body_cap = strlen(g_cfg.model) + strlen(sys_esc) + strlen(user_esc) + strlen(img_b64) + 512;
+        body_cap = strlen(model) + strlen(sys_esc) + strlen(user_esc) + strlen(img_b64) + 512;
         body = (char *)malloc(body_cap);
         if (!body) {
             free(sys_esc);
@@ -208,10 +806,10 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
                  "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
                  "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"},"
                  "{\"type\":\"image_url\",\"image_url\":{\"url\":\"%s\"}}]}],\"temperature\":0.2,\"stream\":%s}",
-                 g_cfg.model, sys_esc, user_esc, img_url_esc, use_stream ? "true" : "false");
+                 model, sys_esc, user_esc, img_url_esc, use_stream ? "true" : "false");
         free(img_url_esc);
     } else {
-        size_t body_cap = strlen(g_cfg.model) + strlen(sys_esc) + strlen(user_esc) + 256;
+        size_t body_cap = strlen(model) + strlen(sys_esc) + strlen(user_esc) + 256;
         body = (char *)malloc(body_cap);
         if (!body) {
             free(sys_esc);
@@ -221,7 +819,7 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
         snprintf(body, body_cap,
                  "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
                  "{\"role\":\"user\",\"content\":\"%s\"}],\"temperature\":0.2,\"stream\":%s}",
-                 g_cfg.model, sys_esc, user_esc, use_stream ? "true" : "false");
+                 model, sys_esc, user_esc, use_stream ? "true" : "false");
     }
     if (provider.kind == PROVIDER_GOOGLE_GEMINI) {
         size_t body_cap;
@@ -231,7 +829,7 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
             img_b64 = ReadFileBase64(image_path);
             if (!img_b64) return DupPrintf("Failed to read screenshot: %s", image_path);
         }
-        body_cap = strlen(sys_esc ? sys_esc : "") + strlen(user_esc ? user_esc : "") + strlen(g_cfg.model) +
+        body_cap = strlen(sys_esc ? sys_esc : "") + strlen(user_esc ? user_esc : "") + strlen(model) +
                    (img_b64 ? strlen(img_b64) : 0) + 512;
         body = (char *)malloc(body_cap);
         if (!body) {
@@ -257,6 +855,7 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
     }
     free(sys_esc);
     free(user_esc);
+    if (timing && body) timing->request_body_bytes += (ULONGLONG)strlen(body);
     WCHAR endpoint_w[512];
     if (MultiByteToWideChar(CP_UTF8, 0, endpoint, -1, endpoint_w, 512) == 0) {
         free(img_b64);
@@ -308,6 +907,7 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
         free(body);
         return DupPrintf("WinHttpOpen failed: %lu", GetLastError());
     }
+    WinHttpSetTimeouts(hSession, 10000, 10000, 30000, recv_timeout_ms > 0 ? recv_timeout_ms : 300000);
     HINTERNET hConnect = WinHttpConnect(hSession, host_w, url.nPort, 0);
     if (!hConnect) {
         DWORD err = GetLastError();
@@ -332,20 +932,21 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
         g_active_hrequest = hRequest;
     }
     LeaveCriticalSection(&g_req_cs);
-    if (g_cfg.api_key[0] && provider.kind == PROVIDER_OPENAI_COMPAT) {
+    if (api_key[0] && provider.kind == PROVIDER_OPENAI_COMPAT) {
         char header_auth[512];
-        snprintf(header_auth, sizeof(header_auth), "Authorization: Bearer %s", g_cfg.api_key);
+        snprintf(header_auth, sizeof(header_auth), "Authorization: Bearer %s", api_key);
         WCHAR header_auth_w[512];
         MultiByteToWideChar(CP_UTF8, 0, header_auth, -1, header_auth_w, 512);
         WinHttpAddRequestHeaders(hRequest, header_auth_w, -1, WINHTTP_ADDREQ_FLAG_ADD);
-    } else if (g_cfg.api_key[0] && provider.kind == PROVIDER_GOOGLE_GEMINI) {
+    } else if (api_key[0] && provider.kind == PROVIDER_GOOGLE_GEMINI) {
         char header_api[512];
         WCHAR header_api_w[512];
-        snprintf(header_api, sizeof(header_api), "x-goog-api-key: %s", g_cfg.api_key);
+        snprintf(header_api, sizeof(header_api), "x-goog-api-key: %s", api_key);
         MultiByteToWideChar(CP_UTF8, 0, header_api, -1, header_api_w, 512);
         WinHttpAddRequestHeaders(hRequest, header_api_w, -1, WINHTTP_ADDREQ_FLAG_ADD);
     }
     BOOL ok = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, (LPVOID)body, (DWORD)strlen(body), (DWORD)strlen(body), 0);
+    if (ok && timing) timing->send_done_ms = GetTickCount64();
     if (!ok || !WinHttpReceiveResponse(hRequest, NULL)) {
         DWORD err = GetLastError();
         int should_close_request = 0;
@@ -362,9 +963,11 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
         free(body);
         return DupPrintf("HTTP request failed (WinHTTP %lu). Endpoint: %s", err, endpoint);
     }
+    if (timing) timing->recv_done_ms = GetTickCount64();
     DWORD status = 0, status_size = sizeof(status);
     WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size, WINHTTP_NO_HEADER_INDEX);
-    DWORD total = 0, size = 0;
+    size_t total = 0;
+    int stream_done = 0;
     char *resp = (char *)malloc(8192);
     char *stream_acc = NULL;
     size_t stream_acc_len = 0, stream_acc_cap = 0, parse_pos = 0;
@@ -383,20 +986,29 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
         return NULL;
     }
     resp[0] = 0;
-    while (WinHttpQueryDataAvailable(hRequest, &size) && size > 0) {
-        char *buf = (char *)malloc(size + 1);
-        if (!buf) break;
+    for (;;) {
+        char read_buf[4096];
         DWORD read = 0;
-        if (WinHttpReadData(hRequest, buf, size, &read) && read > 0) {
-            buf[read] = 0;
+        if (stream_done) break;
+        if (!WinHttpReadData(hRequest, read_buf, sizeof(read_buf) - 1, &read) || read == 0) {
+            break;
+        }
+        read_buf[read] = 0;
+        {
+            if (timing && timing->first_byte_ms == 0) timing->first_byte_ms = GetTickCount64();
+            AppendChunkPreview(timing, read_buf, read);
             size_t new_total = total + read + 1;
             char *new_resp = (char *)realloc(resp, new_total);
-            if (!new_resp) { free(buf); break; }
+            if (!new_resp) { break; }
             resp = new_resp;
-            memcpy(resp + total, buf, read + 1);
+            memcpy(resp + total, read_buf, read + 1);
             total += read;
+            if (timing) timing->bytes_read += read;
             resp[total] = 0;
             if (use_stream) {
+                if (StreamChunkIndicatesDone(resp)) {
+                    stream_done = 1;
+                }
                 while (parse_pos < total) {
                     char *nl = strchr(resp + parse_pos, '\n');
                     if (!nl) break;
@@ -405,7 +1017,9 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
                     if (line_len >= 5 && strncmp(resp + parse_pos, "data:", 5) == 0) {
                         size_t data_pos = parse_pos + 5;
                         while (data_pos < parse_pos + line_len && resp[data_pos] == ' ') data_pos++;
-                        if (!((line_len - (data_pos - parse_pos)) == 6 && strncmp(resp + data_pos, "[DONE]", 6) == 0)) {
+                        if ((line_len - (data_pos - parse_pos)) == 6 && strncmp(resp + data_pos, "[DONE]", 6) == 0) {
+                            stream_done = 1;
+                        } else {
                             char json_line[4096];
                             size_t copy_len = line_len - (data_pos - parse_pos);
                             if (copy_len >= sizeof(json_line)) copy_len = sizeof(json_line) - 1;
@@ -436,11 +1050,12 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
                         }
                     }
                     parse_pos = (size_t)(nl - resp) + 1;
+                    if (stream_done) break;
                 }
             }
         }
-        free(buf);
     }
+    if (timing) timing->read_done_ms = GetTickCount64();
     {
         int should_close_request = 0;
         EnterCriticalSection(&g_req_cs);
@@ -455,23 +1070,79 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
     free(img_b64);
     free(body);
     char *content = NULL;
-    if (use_stream && stream_acc && stream_acc[0]) content = _strdup(stream_acc);
-    else content = ExtractProviderText(&provider, resp);
+    if (use_stream) {
+        if (stream_acc && stream_acc[0]) {
+            content = _strdup(stream_acc);
+        } else if (resp && (strstr(resp, "data: {") != NULL || strstr(resp, "chat.completion.chunk") != NULL)) {
+            content = _strdup("LLM response had no content field.");
+        } else {
+            content = ExtractProviderText(&provider, resp);
+        }
+    } else {
+        content = ExtractProviderText(&provider, resp);
+    }
     if (!content) {
         if (status >= 400) {
             char *err = DupPrintf("HTTP %lu. Raw response: %.600s", (unsigned long)status, resp ? resp : "");
             free(resp); free(stream_acc); return err;
         }
-        content = _strdup(resp && resp[0] ? resp : "LLM response had no content field.");
+        content = _strdup("LLM response had no content field.");
     }
-    if (content) StripThinkBlocks(content);
+    if (timing) timing->done_ms = GetTickCount64();
+    if (content) {
+        StripThinkBlocks(content);
+        NormalizePlainTextOutput(content);
+    }
     free(resp); free(stream_acc);
     return content;
 }
 
+static char *SendLLMRequestForTargetWithTimeout(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing, int recv_timeout_ms) {
+    LlmTargetConfig resolved;
+    ProviderRequestInfo info;
+    char endpoint[512];
+    char *result;
+    ResolveTargetConfig(&resolved, target);
+    strncpy(endpoint, resolved.endpoint, sizeof(endpoint) - 1);
+    endpoint[sizeof(endpoint) - 1] = 0;
+    ResolveProviderRequestInfo(&info, endpoint, resolved.api_key, resolved.model, resolved.stream);
+
+    result = SendLLMRequestForTargetOnce(user_text, region, image_path, system_prompt, req_id, target, timing, recv_timeout_ms);
+    if (!info.use_stream) return result;
+    if (!ShouldRetryWithoutStream(result)) return result;
+
+    {
+        LlmTargetConfig fallback = resolved;
+        char *retry;
+        fallback.stream = 0;
+        retry = SendLLMRequestForTargetOnce(user_text, region, image_path, system_prompt, req_id, &fallback, timing, recv_timeout_ms);
+        if (IsUsableModelAnswer(retry)) {
+            free(result);
+            return retry;
+        }
+        free(retry);
+    }
+    return result;
+}
+
+static char *SendLLMRequestForTarget(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing) {
+    return SendLLMRequestForTargetWithTimeout(user_text, region, image_path, system_prompt, req_id, target, timing, 300000);
+}
+
+static char *SendLLMRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, RequestTiming *timing) {
+    if (g_cfg.ensemble_enabled) {
+        return RunEnsembleRequest(user_text, region, image_path, system_prompt, req_id, timing);
+    }
+    return SendLLMRequestForTarget(user_text, region, image_path, system_prompt, req_id, NULL, timing);
+}
+
 static unsigned __stdcall RequestThread(void *param) {
     RequestPayload *req = (RequestPayload *)param;
-    char *result = SendLLMRequest(req->user_text, req->region, req->image_path, req->system_prompt, req->req_id);
+    RequestTiming timing;
+    memset(&timing, 0, sizeof(timing));
+    char *result = req->use_target_override
+        ? SendLLMRequestForTarget(req->user_text, req->region, req->image_path, req->system_prompt, req->req_id, &req->target, &timing)
+        : SendLLMRequest(req->user_text, req->region, req->image_path, req->system_prompt, req->req_id, &timing);
     if (!result) result = _strdup("LLM request failed.");
     if (req->image_path[0]) {
         DeleteFileA(req->image_path);
@@ -490,6 +1161,10 @@ static unsigned __stdcall RequestThread(void *param) {
 }
 
 static void StartRequestEx(const char *text, const char *region, const char *image_path, POINT anchor, int from_ask, const char *system_prompt) {
+    StartRequestExTarget(text, region, image_path, anchor, from_ask, system_prompt, NULL);
+}
+
+static void StartRequestExTarget(const char *text, const char *region, const char *image_path, POINT anchor, int from_ask, const char *system_prompt, const LlmTargetConfig *target) {
     if (g_req_inflight) return;
     RequestPayload *req = (RequestPayload *)malloc(sizeof(RequestPayload));
     if (!req) return;
@@ -501,11 +1176,17 @@ static void StartRequestEx(const char *text, const char *region, const char *ima
     req->anchor = anchor;
     req->from_ask = from_ask;
     req->req_id = (int)InterlockedIncrement(&g_request_seq);
+    req->start_ms = GetTickCount64();
     strncpy(req->system_prompt, (system_prompt && system_prompt[0]) ? system_prompt : g_cfg.system_prompt, sizeof(req->system_prompt) - 1);
     req->system_prompt[sizeof(req->system_prompt) - 1] = 0;
+    req->use_target_override = target ? 1 : 0;
+    if (target) req->target = *target;
+    else memset(&req->target, 0, sizeof(req->target));
     g_active_request_id = req->req_id;
     g_req_inflight = 1;
     g_stream_has_output = 0;
+    g_overlay_scroll_px = 0;
+    g_overlay_content_height = 0;
     g_wait_anchor = anchor;
     g_wait_dots = 1;
     ShowWaitingOverlay(anchor);
@@ -514,7 +1195,7 @@ static void StartRequestEx(const char *text, const char *region, const char *ima
 }
 
 static void StartRequest(const char *text, const char *region, const char *image_path, POINT anchor, const char *system_prompt) {
-    StartRequestEx(text, region, image_path, anchor, 0, system_prompt);
+    StartRequestExTarget(text, region, image_path, anchor, 0, system_prompt, NULL);
 }
 
 static void CancelCurrentRequest(const char *reason, POINT anchor) {

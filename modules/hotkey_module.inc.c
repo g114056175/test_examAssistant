@@ -91,6 +91,8 @@ static void UnregisterHotkeys(HWND hwnd) {
     UnregisterHotKey(hwnd, HOTKEY_OPEN_SETTINGS);
     UnregisterHotKey(hwnd, HOTKEY_EXIT_APP);
     UnregisterHotKey(hwnd, HOTKEY_CANCEL_REQ);
+    UnregisterHotKey(hwnd, HOTKEY_SCROLL_UP);
+    UnregisterHotKey(hwnd, HOTKEY_SCROLL_DOWN);
 }
 
 static void RegisterHotkeys(HWND hwnd, const AppConfig *cfg) {
@@ -104,6 +106,16 @@ static void RegisterHotkeys(HWND hwnd, const AppConfig *cfg) {
     if (ParseHotkey(cfg->hk_toggle_visible, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_TOGGLE_VISIBLE, mod, vk);
     if (ParseHotkey(cfg->hk_opacity_up, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_OPACITY_UP, mod, vk);
     if (ParseHotkey(cfg->hk_opacity_down, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_OPACITY_DOWN, mod, vk);
+    if (ParseHotkey(cfg->hk_scroll_up, &mod, &vk)) {
+        if (!RegisterHotKey(hwnd, HOTKEY_SCROLL_UP, mod, vk)) {
+            RegisterHotKey(hwnd, HOTKEY_SCROLL_UP, MOD_CONTROL | MOD_ALT, VK_PRIOR);
+        }
+    }
+    if (ParseHotkey(cfg->hk_scroll_down, &mod, &vk)) {
+        if (!RegisterHotKey(hwnd, HOTKEY_SCROLL_DOWN, mod, vk)) {
+            RegisterHotKey(hwnd, HOTKEY_SCROLL_DOWN, MOD_CONTROL | MOD_ALT, VK_NEXT);
+        }
+    }
     if (ParseHotkey(cfg->hk_open_settings, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_OPEN_SETTINGS, mod, vk);
     if (ParseHotkey(cfg->hk_exit, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_EXIT_APP, mod, vk);
     if (ParseHotkey(cfg->hk_cancel, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_CANCEL_REQ, mod, vk);

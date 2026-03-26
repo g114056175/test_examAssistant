@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $source = "main.cpp"
 $exe = "llm_overlay.exe"
 function Compile-Msvc($clPath) {
-  & $clPath /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib shell32.lib gdiplus.lib crypt32.lib
+  & $clPath /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib comdlg32.lib shell32.lib ole32.lib gdiplus.lib crypt32.lib
 }
 
 function Find-Tool($name) {
@@ -24,7 +24,7 @@ if (Test-Path $vswhere) {
   if ($installPath) {
     $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvars64.bat"
     if (Test-Path $vcvars) {
-      $cmd = "`"$vcvars`" && cl /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib shell32.lib gdiplus.lib crypt32.lib"
+      $cmd = "`"$vcvars`" && cl /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib comdlg32.lib shell32.lib ole32.lib gdiplus.lib crypt32.lib"
       & cmd.exe /c $cmd
       if ($LASTEXITCODE -eq 0) { exit 0 }
     }
@@ -41,7 +41,7 @@ $fallbacks = @(
 )
 foreach ($vcvars in $fallbacks) {
   if (Test-Path $vcvars) {
-    $cmd = "`"$vcvars`" && cl /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib shell32.lib gdiplus.lib crypt32.lib"
+    $cmd = "`"$vcvars`" && cl /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib comdlg32.lib shell32.lib ole32.lib gdiplus.lib crypt32.lib"
     & cmd.exe /c $cmd
     if ($LASTEXITCODE -eq 0) { exit 0 }
   }
@@ -49,7 +49,7 @@ foreach ($vcvars in $fallbacks) {
 
 $gxx = Find-Tool "g++.exe"
 if ($gxx) {
-  & $gxx -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe -lwinhttp -lgdi32 -luser32 -ladvapi32 -lshell32 -lgdiplus -lcrypt32
+  & $gxx -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -lcrypt32
   exit 0
 }
 

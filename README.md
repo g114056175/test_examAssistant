@@ -121,3 +121,58 @@ Main sections:
 - Google Gemini uses its native REST format automatically when an `AIza...` key is detected
 - OpenAI and OpenRouter use the OpenAI-compatible chat completions format
 - Image requests are currently sent as PNG
+
+## Version Notes
+
+### v1 (baseline)
+
+- Single-model workflow with prompt level switching and screenshot query support.
+- Lightweight overlay interaction focused on quick daily usage.
+
+### v2 (current)
+
+- Added RAG reference data support (injects reference context into requests).
+- Added multi-LLM review/merge workflow:
+	- primary + side models produce candidate answers
+	- merge stage integrates candidate answers into final output
+	- error/timeout fallback logic for unstable providers or endpoints
+- Added endpoint alias expansion in settings (`openai`, `openrouter`, `google`) including multi-LLM endpoint fields.
+- Unified output style to plain text (reduced markdown artifacts in responses).
+
+## Performance Tradeoff (Important)
+
+- Multi-LLM can improve robustness and cross-check quality, but latency is usually higher.
+- In many real tasks, one strong single model can be faster and good enough.
+- Recommended strategy:
+	- Use single model for speed-critical tasks.
+	- Use multi-LLM for high-risk or high-importance tasks where cross-validation matters.
+
+## Local Config Safety
+
+- `config.ini` is local/private and should not be committed.
+- This repository already ignores it via `.gitignore`.
+
+## Suggested Git Workflow (v1 / v2 / v3)
+
+If `v1` is already pushed and this workspace has moved to `v2`, you can still use `worktree` cleanly.
+
+1. Mark stable points with tags.
+2. Keep each major line in its own worktree directory.
+3. Continue `v3` in a separate worktree without disturbing `v2`.
+
+Example commands:
+
+```powershell
+# mark versions
+git tag v1 <v1_commit>
+git tag v2 HEAD
+
+# create parallel worktrees
+git worktree add ..\My_helper_v1 v1
+git worktree add ..\My_helper_v2 v2
+
+# start v3 from current main branch state
+git worktree add ..\My_helper_v3 -b v3-dev
+```
+
+This gives side-by-side code and executable testing across versions while keeping one README as the shared entry point.

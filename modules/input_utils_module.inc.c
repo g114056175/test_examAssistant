@@ -134,9 +134,9 @@ static void ShowWaitingOverlay(POINT anchor) {
     const char *dots = (g_wait_dots == 1) ? "." : (g_wait_dots == 2) ? ".." : "...";
     char wait_txt[2300];
     if (g_wait_prefix[0]) {
-        snprintf(wait_txt, sizeof(wait_txt), "%s\n\nWaiting%s", g_wait_prefix, dots);
+        snprintf(wait_txt, sizeof(wait_txt), "wait%s\n%s", dots, g_wait_prefix);
     } else {
-        snprintf(wait_txt, sizeof(wait_txt), "Waiting%s", dots);
+        snprintf(wait_txt, sizeof(wait_txt), "wait%s", dots);
     }
     ShowOverlayText(wait_txt, anchor);
 }
