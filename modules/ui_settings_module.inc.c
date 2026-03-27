@@ -633,7 +633,6 @@ static void CreateAdvancedPageControls(HWND hwnd) {
     CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 130, 298, 470, 56, hwnd, (HMENU)ID_EDIT_ROUTE_PROMPT, GetModuleHandle(NULL), NULL);
     CreateWindowA("BUTTON", "Quick Test", WS_CHILD | WS_VISIBLE, 130, 362, 90, 24, hwnd, (HMENU)ID_BTN_TEST_ROUTE, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Use + / - to add or remove routes. Empty routes are auto-cleared when saving.", WS_CHILD | WS_VISIBLE, 230, 366, 370, 18, hwnd, NULL, GetModuleHandle(NULL), NULL);
 }
 
 static void RebuildPageControls(HWND hwnd) {
@@ -672,8 +671,8 @@ static void BuildSettingsLayout(HWND hwnd) {
     while ((c = GetWindow(hwnd, GW_CHILD)) != NULL) DestroyWindow(c);
     CreateWindowA("BUTTON", g_show_advanced ? "Basic" : "[Basic]", WS_CHILD | WS_VISIBLE, 20, 10, 90, 22, hwnd, (HMENU)ID_BTN_TAB_BASIC, GetModuleHandle(NULL), NULL);
     CreateWindowA("BUTTON", g_show_advanced ? "[Advanced]" : "Advanced", WS_CHILD | WS_VISIBLE, 115, 10, 90, 22, hwnd, (HMENU)ID_BTN_TAB_ADV, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Reset", WS_CHILD | WS_VISIBLE, 400, 500, 95, 28, hwnd, (HMENU)ID_BTN_RESET, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE, 505, 500, 95, 28, hwnd, (HMENU)ID_BTN_SAVE, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Reset", WS_CHILD | WS_VISIBLE, 400, 458, 95, 28, hwnd, (HMENU)ID_BTN_RESET, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE, 505, 458, 95, 28, hwnd, (HMENU)ID_BTN_SAVE, GetModuleHandle(NULL), NULL);
     RebuildPageControls(hwnd);
 }
 
@@ -686,13 +685,6 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         if (wparam) SetWindowTextW(hwnd, L"Helper");
         break;
     case WM_CLOSE:
-        if (g_settings_dirty) {
-            int ret = MessageBoxA(hwnd,
-                                  "You have unsaved changes. Exit without saving?",
-                                  "Unsaved Changes",
-                                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-            if (ret != IDYES) return 0;
-        }
         DestroyWindow(g_hwnd_main);
         return 0;
     case WM_COMMAND: {
@@ -903,6 +895,6 @@ static void CreateSettingsWindow(HWND owner) {
     RegisterClassW(&wc);
     g_hwnd_settings = CreateWindowW(wc.lpszClassName, L"Helper",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                                    100, 100, 640, 620, NULL, NULL, wc.hInstance, NULL);
+                                    100, 100, 640, 565, NULL, NULL, wc.hInstance, NULL);
     BuildSettingsLayout(g_hwnd_settings);
 }

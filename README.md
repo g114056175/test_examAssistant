@@ -29,8 +29,7 @@ Lightweight Win32 desktop helper for quick LLM queries from selected text or a s
 - Selection box behavior changed:
 	- Keeps updating while moving.
 	- Auto-hides only after staying still for about 2 seconds.
-- Added unsaved-changes prompt only when closing via window `X`.
-	- Exit via hotkey still closes immediately.
+- Closing the app is immediate (no unsaved prompt dialog).
 
 ## Provider Support
 

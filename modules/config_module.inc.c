@@ -1,8 +1,8 @@
 static void ConfigDefaults(AppConfig *cfg) {
     memset(cfg, 0, sizeof(*cfg));
-    strcpy(cfg->endpoint, "http://192.168.1.10:8081/v1/chat/completions");
+    strcpy(cfg->endpoint, "");
     strcpy(cfg->api_key, "");
-    strcpy(cfg->model, "qwen3-coder");
+    strcpy(cfg->model, "");
     strcpy(cfg->system_prompt, "Reply in Traditional Chinese. Plain text only. Give the direct answer only, no explanation. If and only if the question is multiple-choice, answer with selected options like: (A) (C). For non-multiple-choice questions, reply with normal direct text answer.");
     strcpy(cfg->prompt_2, "Reply in Traditional Chinese. Plain text only. Give the answer first, then add a short and simple explanation.");
     strcpy(cfg->prompt_3, "Reply in Traditional Chinese. Plain text only. Give the answer first, then provide a detailed explanation with key reasoning and conclusion.");
