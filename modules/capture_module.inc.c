@@ -218,7 +218,7 @@ static void StartCaptureSelection(POINT anchor) {
     g_have_tl = 1;
     g_have_br = 0;
     g_capture_active = 1;
-    g_capture_deadline = GetTickCount64() + 5000;
+    g_capture_deadline = GetTickCount64() + 2000;
     ShowCaptureOverlay();
     SetTimer(g_hwnd_main, 2, 33, NULL);
 }

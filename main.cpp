@@ -28,6 +28,9 @@
 #define APP_NAME "Helper"
 #define CONFIG_FILE "config.ini"
 #define MAX_REVIEW_MODELS 8
+#define MAX_PROMPT_ROUTES 5
+#define MAX_IMAGE_ROUTES 3
+#define MAX_MODEL_ROUTES 16
 
 #define HOTKEY_SEND_SELECTED  1
 #define HOTKEY_SEND_PROMPT2   4
@@ -42,8 +45,11 @@
 #define HOTKEY_SEND_PROMPT3   11
 #define HOTKEY_SCROLL_UP      12
 #define HOTKEY_SCROLL_DOWN    13
+#define HOTKEY_MODEL_ROUTE_BASE 100
 
 #define ID_EDIT_PROMPT 401
+#define ID_EDIT_PROMPT4 108
+#define ID_EDIT_PROMPT5 109
 #define ID_BTN_SAVE 1
 #define ID_BTN_ASK 3
 #define ID_BTN_RESET 4
@@ -89,6 +95,18 @@
 #define ID_LBL_MERGE1 932
 #define ID_LBL_MERGE2 933
 #define ID_LBL_MERGE3 934
+#define ID_LBL_ROUTE_KIND 935
+#define ID_LBL_ROUTE_SLOT 936
+#define ID_LBL_ROUTE_EP 937
+#define ID_LBL_ROUTE_KEY 938
+#define ID_LBL_ROUTE_MODEL 939
+#define ID_LBL_ROUTE_PROMPT 940
+#define ID_LBL_PROMPT4 941
+#define ID_LBL_PROMPT5 942
+#define ID_LBL_SEND4 943
+#define ID_LBL_SEND5 944
+#define ID_LBL_IMAGE2 945
+#define ID_LBL_IMAGE3 946
 
 #define ID_CHK_RAG_ENABLED 306
 #define ID_EDIT_RAG_PATH 307
@@ -111,6 +129,16 @@
 #define ID_EDIT_MAIN_PROMPT1 324
 #define ID_EDIT_MAIN_PROMPT2 325
 #define ID_EDIT_MAIN_PROMPT3 326
+#define ID_CMB_ROUTE_KIND 330
+#define ID_CMB_ROUTE_SLOT 331
+#define ID_EDIT_ROUTE_EP 332
+#define ID_EDIT_ROUTE_KEY 333
+#define ID_EDIT_ROUTE_MODEL 334
+#define ID_EDIT_ROUTE_PROMPT 335
+#define ID_BTN_TEST_ROUTE 336
+#define ID_EDIT_ROUTE_HOTKEY 337
+#define ID_BTN_ROUTE_ADD 338
+#define ID_BTN_ROUTE_REMOVE 339
 
 #define WM_APP_RESPONSE (WM_APP + 1)
 #define WM_APP_TRAY (WM_APP + 2)
@@ -124,7 +152,24 @@ typedef struct AppConfig {
     char system_prompt[1024];
     char prompt_2[1024];
     char prompt_3[1024];
+    char prompt_4[1024];
+    char prompt_5[1024];
     char user_template[2048];
+    char route_prompt_endpoint[MAX_PROMPT_ROUTES][512];
+    char route_prompt_api_key[MAX_PROMPT_ROUTES][256];
+    char route_prompt_model[MAX_PROMPT_ROUTES][128];
+    char route_prompt_text[MAX_PROMPT_ROUTES][1024];
+    char route_image_endpoint[MAX_IMAGE_ROUTES][512];
+    char route_image_api_key[MAX_IMAGE_ROUTES][256];
+    char route_image_model[MAX_IMAGE_ROUTES][128];
+    char route_image_prompt[MAX_IMAGE_ROUTES][1024];
+    int model_route_count;
+    int model_route_kind[MAX_MODEL_ROUTES];
+    char model_route_endpoint[MAX_MODEL_ROUTES][512];
+    char model_route_api_key[MAX_MODEL_ROUTES][256];
+    char model_route_model[MAX_MODEL_ROUTES][128];
+    char model_route_prompt[MAX_MODEL_ROUTES][1024];
+    char model_route_hotkey[MAX_MODEL_ROUTES][64];
     int rag_enabled;
     char rag_source_path[1024];
     int ensemble_enabled;
@@ -145,8 +190,12 @@ typedef struct AppConfig {
     char hk_send[64];
     char hk_send2[64];
     char hk_send3[64];
+    char hk_send4[64];
+    char hk_send5[64];
     char hk_tl[64];
     char hk_br[64];
+    char hk_img2[64];
+    char hk_img3[64];
     char hk_toggle_enable[64];
     char hk_toggle_visible[64];
     char hk_opacity_up[64];
@@ -257,6 +306,7 @@ static CRITICAL_SECTION g_req_cs;
 static ULONG_PTR g_gdiplus_token = 0;
 static int g_overlay_scroll_px = 0;
 static int g_overlay_content_height = 0;
+static int g_settings_dirty = 0;
 
 static void LoadConfig(AppConfig *cfg);
 static void SaveConfig(const AppConfig *cfg);
@@ -322,6 +372,89 @@ static void LoadReviewerEditor(HWND hwnd, int index);
 static void SaveReviewerEditor(HWND hwnd, int index);
 static void RefreshReviewerSlotCombo(HWND hwnd, int select_index);
 static void StartRequestExTarget(const char *text, const char *region, const char *image_path, POINT anchor, int from_ask, const char *system_prompt, const LlmTargetConfig *target);
+static void TriggerModelRouteAt(int route_index, POINT cursor);
+
+static int ResolveRouteTargetConfig(int route_index, LlmTargetConfig *out_target) {
+    if (!out_target) return 0;
+    memset(out_target, 0, sizeof(*out_target));
+    if (route_index >= 0 && route_index < MAX_PROMPT_ROUTES) {
+        const char *ep = g_cfg.route_prompt_endpoint[route_index];
+        const char *key = g_cfg.route_prompt_api_key[route_index];
+        const char *model = g_cfg.route_prompt_model[route_index];
+        if (!ep[0] || !model[0]) return 0;
+        strncpy(out_target->endpoint, ep, sizeof(out_target->endpoint) - 1);
+        strncpy(out_target->api_key, key, sizeof(out_target->api_key) - 1);
+        strncpy(out_target->model, model, sizeof(out_target->model) - 1);
+        out_target->stream = g_cfg.stream;
+        return 1;
+    }
+    if (route_index >= 100 && route_index < 100 + MAX_IMAGE_ROUTES) {
+        int idx = route_index - 100;
+        if (!g_cfg.route_image_endpoint[idx][0] || !g_cfg.route_image_model[idx][0]) return 0;
+        strncpy(out_target->endpoint, g_cfg.route_image_endpoint[idx], sizeof(out_target->endpoint) - 1);
+        strncpy(out_target->api_key, g_cfg.route_image_api_key[idx], sizeof(out_target->api_key) - 1);
+        strncpy(out_target->model, g_cfg.route_image_model[idx], sizeof(out_target->model) - 1);
+        out_target->stream = g_cfg.stream;
+        return 1;
+    }
+    return 0;
+}
+
+static const char *ResolveRoutePromptText(int route_index) {
+    if (route_index >= 0 && route_index < MAX_PROMPT_ROUTES && g_cfg.route_prompt_text[route_index][0]) {
+        return g_cfg.route_prompt_text[route_index];
+    }
+    if (route_index == 0) return g_cfg.system_prompt;
+    if (route_index == 1) return g_cfg.prompt_2;
+    if (route_index == 2) return g_cfg.prompt_3;
+    if (route_index == 3 && g_cfg.prompt_4[0]) return g_cfg.prompt_4;
+    if (route_index == 4 && g_cfg.prompt_5[0]) return g_cfg.prompt_5;
+    return g_cfg.prompt_3;
+}
+
+static const char *ResolveImageRoutePromptText(int image_index) {
+    if (image_index >= 0 && image_index < MAX_IMAGE_ROUTES && g_cfg.route_image_prompt[image_index][0]) {
+        return g_cfg.route_image_prompt[image_index];
+    }
+    return g_cfg.system_prompt;
+}
+
+static void TriggerModelRouteAt(int route_index, POINT cursor) {
+    LlmTargetConfig route_target;
+    const char *route_prompt;
+    if (route_index < 0 || route_index >= g_cfg.model_route_count) return;
+    if (!g_cfg.model_route_endpoint[route_index][0] || !g_cfg.model_route_model[route_index][0]) return;
+
+    memset(&route_target, 0, sizeof(route_target));
+    strncpy(route_target.endpoint, g_cfg.model_route_endpoint[route_index], sizeof(route_target.endpoint) - 1);
+    strncpy(route_target.api_key, g_cfg.model_route_api_key[route_index], sizeof(route_target.api_key) - 1);
+    strncpy(route_target.model, g_cfg.model_route_model[route_index], sizeof(route_target.model) - 1);
+    route_target.stream = g_cfg.stream;
+    route_prompt = g_cfg.model_route_prompt[route_index][0] ? g_cfg.model_route_prompt[route_index] : g_cfg.system_prompt;
+
+    if (g_cfg.model_route_kind[route_index] == 1) {
+        char saved_path[MAX_PATH];
+        if (ConfirmCaptureSelection(cursor, saved_path, sizeof(saved_path))) {
+            g_wait_prefix[0] = 0;
+            StartRequestExTarget("", "", saved_path, cursor, 0, route_prompt, &route_target);
+        }
+        return;
+    }
+
+    if (g_req_inflight) {
+        ShowOverlayText("Request in progress. Please wait...", cursor);
+        return;
+    }
+    char *text = GetSelectedText();
+    if (HasVisibleText(text)) {
+        g_wait_prefix[0] = 0;
+        StartRequestExTarget(text, "", "", cursor, 0, route_prompt, &route_target);
+    } else {
+        g_wait_prefix[0] = 0;
+        ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+    }
+    free(text);
+}
 
 // config helpers split into module file
 #include "modules/config_module.inc.c"
@@ -346,6 +479,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
     case WM_CREATE:
         InitConfigPath();
         LoadConfig(&g_cfg);
+        g_settings_dirty = 0;
         RegisterHotkeys(hwnd, &g_cfg);
         CreateSettingsWindow(hwnd);
         SetWindowTextW(g_hwnd_settings, L"Helper");
@@ -362,40 +496,13 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             }
             char *text = GetSelectedText();
             if (HasVisibleText(text)) {
+                LlmTargetConfig route_target;
                 g_wait_prefix[0] = 0;
-                StartRequest(text, "", "", cursor, g_cfg.system_prompt);
-            } else {
-                g_wait_prefix[0] = 0;
-                ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
-            }
-            free(text);
-            break;
-        }
-        case HOTKEY_SEND_PROMPT2: {
-            if (g_req_inflight) {
-                ShowOverlayText("Request in progress. Please wait...", cursor);
-                break;
-            }
-            char *text = GetSelectedText();
-            if (HasVisibleText(text)) {
-                g_wait_prefix[0] = 0;
-                StartRequest(text, "", "", cursor, g_cfg.prompt_2);
-            } else {
-                g_wait_prefix[0] = 0;
-                ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
-            }
-            free(text);
-            break;
-        }
-        case HOTKEY_SEND_PROMPT3: {
-            if (g_req_inflight) {
-                ShowOverlayText("Request in progress. Please wait...", cursor);
-                break;
-            }
-            char *text = GetSelectedText();
-            if (HasVisibleText(text)) {
-                g_wait_prefix[0] = 0;
-                StartRequest(text, "", "", cursor, g_cfg.prompt_3);
+                if (ResolveRouteTargetConfig(0, &route_target)) {
+                    StartRequestExTarget(text, "", "", cursor, 0, ResolveRoutePromptText(0), &route_target);
+                } else {
+                    StartRequest(text, "", "", cursor, ResolveRoutePromptText(0));
+                }
             } else {
                 g_wait_prefix[0] = 0;
                 ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
@@ -409,14 +516,18 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         case HOTKEY_SET_BR: {
             char saved_path[MAX_PATH];
             if (ConfirmCaptureSelection(cursor, saved_path, sizeof(saved_path))) {
+                LlmTargetConfig route_target;
                 g_wait_prefix[0] = 0;
-                StartRequest("", "", saved_path, cursor, g_cfg.system_prompt);
+                if (ResolveRouteTargetConfig(100, &route_target)) {
+                    StartRequestExTarget("", "", saved_path, cursor, 0, ResolveImageRoutePromptText(0), &route_target);
+                } else {
+                    StartRequest("", "", saved_path, cursor, ResolveImageRoutePromptText(0));
+                }
             }
             break;
         }
         case HOTKEY_TOGGLE_VISIBLE:
             g_cfg.overlay_visible = !g_cfg.overlay_visible;
-            SaveConfig(&g_cfg);
             if (!g_cfg.overlay_visible) {
                 HideOverlay();
             } else {
@@ -427,7 +538,6 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             break;
         case HOTKEY_OPACITY_UP:
             g_cfg.opacity = StepOpacityTier(g_cfg.opacity, +1);
-            SaveConfig(&g_cfg);
             if (g_hwnd_overlay) {
                 SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA);
                 InvalidateRect(g_hwnd_overlay, NULL, TRUE);
@@ -436,7 +546,6 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             break;
         case HOTKEY_OPACITY_DOWN:
             g_cfg.opacity = StepOpacityTier(g_cfg.opacity, -1);
-            SaveConfig(&g_cfg);
             if (g_hwnd_overlay) {
                 SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA);
                 InvalidateRect(g_hwnd_overlay, NULL, TRUE);
@@ -465,6 +574,12 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         case HOTKEY_CANCEL_REQ:
             CancelCurrentRequest("Request canceled.", cursor);
             break;
+        default:
+            if ((int)wparam >= HOTKEY_MODEL_ROUTE_BASE &&
+                (int)wparam < HOTKEY_MODEL_ROUTE_BASE + MAX_MODEL_ROUTES) {
+                TriggerModelRouteAt((int)wparam - HOTKEY_MODEL_ROUTE_BASE, cursor);
+            }
+            break;
         }
         return 0;
     }
@@ -477,9 +592,13 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         }
         if (wparam == 2 && g_capture_active) {
             POINT cursor;
+            ULONGLONG now = GetTickCount64();
             GetCursorPos(&cursor);
-            g_capture_current = cursor;
-            if (GetTickCount64() >= g_capture_deadline) {
+            if (cursor.x != g_capture_current.x || cursor.y != g_capture_current.y) {
+                g_capture_current = cursor;
+                g_capture_deadline = now + 2000;
+                if (g_hwnd_capture) InvalidateRect(g_hwnd_capture, NULL, TRUE);
+            } else if (now >= g_capture_deadline) {
                 CancelCaptureSelection();
             } else if (g_hwnd_capture) {
                 InvalidateRect(g_hwnd_capture, NULL, TRUE);

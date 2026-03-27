@@ -1130,9 +1130,6 @@ static char *SendLLMRequestForTarget(const char *user_text, const char *region, 
 }
 
 static char *SendLLMRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, RequestTiming *timing) {
-    if (g_cfg.ensemble_enabled) {
-        return RunEnsembleRequest(user_text, region, image_path, system_prompt, req_id, timing);
-    }
     return SendLLMRequestForTarget(user_text, region, image_path, system_prompt, req_id, NULL, timing);
 }
 

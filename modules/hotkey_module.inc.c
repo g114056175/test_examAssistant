@@ -81,8 +81,6 @@ static int ParseHotkey(const char *text, UINT *mod, UINT *vk) {
 
 static void UnregisterHotkeys(HWND hwnd) {
     UnregisterHotKey(hwnd, HOTKEY_SEND_SELECTED);
-    UnregisterHotKey(hwnd, HOTKEY_SEND_PROMPT2);
-    UnregisterHotKey(hwnd, HOTKEY_SEND_PROMPT3);
     UnregisterHotKey(hwnd, HOTKEY_SET_TL);
     UnregisterHotKey(hwnd, HOTKEY_SET_BR);
     UnregisterHotKey(hwnd, HOTKEY_TOGGLE_VISIBLE);
@@ -93,14 +91,15 @@ static void UnregisterHotkeys(HWND hwnd) {
     UnregisterHotKey(hwnd, HOTKEY_CANCEL_REQ);
     UnregisterHotKey(hwnd, HOTKEY_SCROLL_UP);
     UnregisterHotKey(hwnd, HOTKEY_SCROLL_DOWN);
+    for (int i = 0; i < MAX_MODEL_ROUTES; ++i) {
+        UnregisterHotKey(hwnd, HOTKEY_MODEL_ROUTE_BASE + i);
+    }
 }
 
 static void RegisterHotkeys(HWND hwnd, const AppConfig *cfg) {
     UINT mod = 0, vk = 0;
     UnregisterHotkeys(hwnd);
     if (ParseHotkey(cfg->hk_send, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_SEND_SELECTED, mod, vk);
-    if (ParseHotkey(cfg->hk_send2, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_SEND_PROMPT2, mod, vk);
-    if (ParseHotkey(cfg->hk_send3, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_SEND_PROMPT3, mod, vk);
     if (ParseHotkey(cfg->hk_tl, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_SET_TL, mod, vk);
     if (ParseHotkey(cfg->hk_br, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_SET_BR, mod, vk);
     if (ParseHotkey(cfg->hk_toggle_visible, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_TOGGLE_VISIBLE, mod, vk);
@@ -119,6 +118,11 @@ static void RegisterHotkeys(HWND hwnd, const AppConfig *cfg) {
     if (ParseHotkey(cfg->hk_open_settings, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_OPEN_SETTINGS, mod, vk);
     if (ParseHotkey(cfg->hk_exit, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_EXIT_APP, mod, vk);
     if (ParseHotkey(cfg->hk_cancel, &mod, &vk)) RegisterHotKey(hwnd, HOTKEY_CANCEL_REQ, mod, vk);
+    for (int i = 0; i < cfg->model_route_count && i < MAX_MODEL_ROUTES; ++i) {
+        if (ParseHotkey(cfg->model_route_hotkey[i], &mod, &vk)) {
+            RegisterHotKey(hwnd, HOTKEY_MODEL_ROUTE_BASE + i, mod, vk);
+        }
+    }
 }
 
 static void BuildHotkeyString(UINT mod, UINT vk, char *out, size_t out_size) {

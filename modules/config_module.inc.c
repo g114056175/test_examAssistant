@@ -6,7 +6,30 @@ static void ConfigDefaults(AppConfig *cfg) {
     strcpy(cfg->system_prompt, "Reply in Traditional Chinese. Plain text only. Give the direct answer only, no explanation. If and only if the question is multiple-choice, answer with selected options like: (A) (C). For non-multiple-choice questions, reply with normal direct text answer.");
     strcpy(cfg->prompt_2, "Reply in Traditional Chinese. Plain text only. Give the answer first, then add a short and simple explanation.");
     strcpy(cfg->prompt_3, "Reply in Traditional Chinese. Plain text only. Give the answer first, then provide a detailed explanation with key reasoning and conclusion.");
+    strcpy(cfg->prompt_4, "Reply in Traditional Chinese. Plain text only. Answer directly and keep it short.");
+    strcpy(cfg->prompt_5, "Reply in Traditional Chinese. Plain text only. Answer first, then list concise key points.");
     strcpy(cfg->user_template, "{{text}}");
+    for (int i = 0; i < MAX_PROMPT_ROUTES; ++i) {
+        cfg->route_prompt_endpoint[i][0] = 0;
+        cfg->route_prompt_api_key[i][0] = 0;
+        cfg->route_prompt_model[i][0] = 0;
+        cfg->route_prompt_text[i][0] = 0;
+    }
+    for (int i = 0; i < MAX_IMAGE_ROUTES; ++i) {
+        cfg->route_image_endpoint[i][0] = 0;
+        cfg->route_image_api_key[i][0] = 0;
+        cfg->route_image_model[i][0] = 0;
+        cfg->route_image_prompt[i][0] = 0;
+    }
+    cfg->model_route_count = 0;
+    for (int i = 0; i < MAX_MODEL_ROUTES; ++i) {
+        cfg->model_route_kind[i] = 0;
+        cfg->model_route_endpoint[i][0] = 0;
+        cfg->model_route_api_key[i][0] = 0;
+        cfg->model_route_model[i][0] = 0;
+        cfg->model_route_prompt[i][0] = 0;
+        cfg->model_route_hotkey[i][0] = 0;
+    }
     cfg->rag_enabled = 0;
     strcpy(cfg->rag_source_path, "");
     cfg->ensemble_enabled = 0;
@@ -28,14 +51,18 @@ static void ConfigDefaults(AppConfig *cfg) {
     strcpy(cfg->hk_send, "Ctrl+Q");
     strcpy(cfg->hk_send2, "Ctrl+W");
     strcpy(cfg->hk_send3, "Ctrl+E");
+    strcpy(cfg->hk_send4, "");
+    strcpy(cfg->hk_send5, "");
     strcpy(cfg->hk_tl, "Ctrl+Alt+1");
     strcpy(cfg->hk_br, "Ctrl+Alt+2");
+    strcpy(cfg->hk_img2, "");
+    strcpy(cfg->hk_img3, "");
     strcpy(cfg->hk_toggle_enable, "Ctrl+Alt+E");
     strcpy(cfg->hk_toggle_visible, "Alt+V");
-    strcpy(cfg->hk_opacity_up, "Ctrl+Alt+Up");
-    strcpy(cfg->hk_opacity_down, "Ctrl+Alt+Down");
-    strcpy(cfg->hk_scroll_up, "Ctrl+Alt+Left");
-    strcpy(cfg->hk_scroll_down, "Ctrl+Alt+Right");
+    strcpy(cfg->hk_opacity_up, "Ctrl+Alt+Right");
+    strcpy(cfg->hk_opacity_down, "Ctrl+Alt+Left");
+    strcpy(cfg->hk_scroll_up, "Ctrl+Alt+Up");
+    strcpy(cfg->hk_scroll_down, "Ctrl+Alt+Down");
     strcpy(cfg->hk_open_settings, "Ctrl+Alt+S");
     strcpy(cfg->hk_exit, "Ctrl+Alt+X");
     strcpy(cfg->hk_cancel, "Ctrl+R");
@@ -222,11 +249,99 @@ static void LoadConfig(AppConfig *cfg) {
     GetPrivateProfileStringA("Prompt", "prompt_1", cfg->system_prompt, cfg->system_prompt, sizeof(cfg->system_prompt), g_config_path);
     GetPrivateProfileStringA("Prompt", "prompt_2", cfg->prompt_2, cfg->prompt_2, sizeof(cfg->prompt_2), g_config_path);
     GetPrivateProfileStringA("Prompt", "prompt_3", cfg->prompt_3, cfg->prompt_3, sizeof(cfg->prompt_3), g_config_path);
+    GetPrivateProfileStringA("Prompt", "prompt_4", cfg->prompt_4, cfg->prompt_4, sizeof(cfg->prompt_4), g_config_path);
+    GetPrivateProfileStringA("Prompt", "prompt_5", cfg->prompt_5, cfg->prompt_5, sizeof(cfg->prompt_5), g_config_path);
     GetPrivateProfileStringA("Prompt", "user_template", cfg->user_template, cfg->user_template, sizeof(cfg->user_template), g_config_path);
     UnescapeIniValue(cfg->system_prompt);
     UnescapeIniValue(cfg->prompt_2);
     UnescapeIniValue(cfg->prompt_3);
+    UnescapeIniValue(cfg->prompt_4);
+    UnescapeIniValue(cfg->prompt_5);
     UnescapeIniValue(cfg->user_template);
+    for (int i = 0; i < MAX_PROMPT_ROUTES; ++i) {
+        char key[64];
+        snprintf(key, sizeof(key), "prompt_%d_endpoint", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_prompt_endpoint[i], sizeof(cfg->route_prompt_endpoint[i]), g_config_path);
+        snprintf(key, sizeof(key), "prompt_%d_api_key", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_prompt_api_key[i], sizeof(cfg->route_prompt_api_key[i]), g_config_path);
+        snprintf(key, sizeof(key), "prompt_%d_model", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_prompt_model[i], sizeof(cfg->route_prompt_model[i]), g_config_path);
+        snprintf(key, sizeof(key), "prompt_%d_prompt", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_prompt_text[i], sizeof(cfg->route_prompt_text[i]), g_config_path);
+        UnescapeIniValue(cfg->route_prompt_endpoint[i]);
+        UnescapeIniValue(cfg->route_prompt_api_key[i]);
+        UnescapeIniValue(cfg->route_prompt_model[i]);
+        UnescapeIniValue(cfg->route_prompt_text[i]);
+        NormalizeFriendlyEndpointAlias(cfg->route_prompt_endpoint[i], (int)sizeof(cfg->route_prompt_endpoint[i]));
+    }
+    for (int i = 0; i < MAX_IMAGE_ROUTES; ++i) {
+        char key[64];
+        snprintf(key, sizeof(key), "image_%d_endpoint", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_image_endpoint[i], sizeof(cfg->route_image_endpoint[i]), g_config_path);
+        snprintf(key, sizeof(key), "image_%d_api_key", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_image_api_key[i], sizeof(cfg->route_image_api_key[i]), g_config_path);
+        snprintf(key, sizeof(key), "image_%d_model", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_image_model[i], sizeof(cfg->route_image_model[i]), g_config_path);
+        snprintf(key, sizeof(key), "image_%d_prompt", i + 1);
+        GetPrivateProfileStringA("Routes", key, "", cfg->route_image_prompt[i], sizeof(cfg->route_image_prompt[i]), g_config_path);
+        UnescapeIniValue(cfg->route_image_endpoint[i]);
+        UnescapeIniValue(cfg->route_image_api_key[i]);
+        UnescapeIniValue(cfg->route_image_model[i]);
+        UnescapeIniValue(cfg->route_image_prompt[i]);
+        NormalizeFriendlyEndpointAlias(cfg->route_image_endpoint[i], (int)sizeof(cfg->route_image_endpoint[i]));
+    }
+    cfg->model_route_count = GetPrivateProfileIntA("ModelRouter", "route_count", 0, g_config_path);
+    if (cfg->model_route_count < 0) cfg->model_route_count = 0;
+    if (cfg->model_route_count > MAX_MODEL_ROUTES) cfg->model_route_count = MAX_MODEL_ROUTES;
+    for (int i = 0; i < cfg->model_route_count; ++i) {
+        char key[64];
+        snprintf(key, sizeof(key), "route_%d_kind", i + 1);
+        cfg->model_route_kind[i] = GetPrivateProfileIntA("ModelRouter", key, 0, g_config_path) ? 1 : 0;
+        snprintf(key, sizeof(key), "route_%d_endpoint", i + 1);
+        GetPrivateProfileStringA("ModelRouter", key, "", cfg->model_route_endpoint[i], sizeof(cfg->model_route_endpoint[i]), g_config_path);
+        snprintf(key, sizeof(key), "route_%d_api_key", i + 1);
+        GetPrivateProfileStringA("ModelRouter", key, "", cfg->model_route_api_key[i], sizeof(cfg->model_route_api_key[i]), g_config_path);
+        snprintf(key, sizeof(key), "route_%d_model", i + 1);
+        GetPrivateProfileStringA("ModelRouter", key, "", cfg->model_route_model[i], sizeof(cfg->model_route_model[i]), g_config_path);
+        snprintf(key, sizeof(key), "route_%d_prompt", i + 1);
+        GetPrivateProfileStringA("ModelRouter", key, "", cfg->model_route_prompt[i], sizeof(cfg->model_route_prompt[i]), g_config_path);
+        snprintf(key, sizeof(key), "route_%d_hotkey", i + 1);
+        GetPrivateProfileStringA("ModelRouter", key, "", cfg->model_route_hotkey[i], sizeof(cfg->model_route_hotkey[i]), g_config_path);
+        UnescapeIniValue(cfg->model_route_endpoint[i]);
+        UnescapeIniValue(cfg->model_route_api_key[i]);
+        UnescapeIniValue(cfg->model_route_model[i]);
+        UnescapeIniValue(cfg->model_route_prompt[i]);
+        UnescapeIniValue(cfg->model_route_hotkey[i]);
+        NormalizeFriendlyEndpointAlias(cfg->model_route_endpoint[i], (int)sizeof(cfg->model_route_endpoint[i]));
+        if (IsBlankText(cfg->model_route_endpoint[i]) && IsBlankText(cfg->model_route_api_key[i]) &&
+            IsBlankText(cfg->model_route_model[i]) && IsBlankText(cfg->model_route_prompt[i]) &&
+            IsBlankText(cfg->model_route_hotkey[i])) {
+            cfg->model_route_kind[i] = -1;
+        }
+    }
+    if (cfg->model_route_count > 0) {
+        int w = 0;
+        for (int i = 0; i < cfg->model_route_count; ++i) {
+            if (cfg->model_route_kind[i] < 0) continue;
+            if (w != i) {
+                cfg->model_route_kind[w] = cfg->model_route_kind[i];
+                strcpy(cfg->model_route_endpoint[w], cfg->model_route_endpoint[i]);
+                strcpy(cfg->model_route_api_key[w], cfg->model_route_api_key[i]);
+                strcpy(cfg->model_route_model[w], cfg->model_route_model[i]);
+                strcpy(cfg->model_route_prompt[w], cfg->model_route_prompt[i]);
+                strcpy(cfg->model_route_hotkey[w], cfg->model_route_hotkey[i]);
+            }
+            ++w;
+        }
+        cfg->model_route_count = w;
+    }
+    if (!cfg->route_image_endpoint[0][0]) GetPrivateProfileStringA("Routes", "image_endpoint", "", cfg->route_image_endpoint[0], sizeof(cfg->route_image_endpoint[0]), g_config_path);
+    if (!cfg->route_image_api_key[0][0]) GetPrivateProfileStringA("Routes", "image_api_key", "", cfg->route_image_api_key[0], sizeof(cfg->route_image_api_key[0]), g_config_path);
+    if (!cfg->route_image_model[0][0]) GetPrivateProfileStringA("Routes", "image_model", "", cfg->route_image_model[0], sizeof(cfg->route_image_model[0]), g_config_path);
+    UnescapeIniValue(cfg->route_image_endpoint[0]);
+    UnescapeIniValue(cfg->route_image_api_key[0]);
+    UnescapeIniValue(cfg->route_image_model[0]);
+    NormalizeFriendlyEndpointAlias(cfg->route_image_endpoint[0], (int)sizeof(cfg->route_image_endpoint[0]));
     cfg->rag_enabled = GetPrivateProfileIntA("RAG", "enabled", cfg->rag_enabled, g_config_path);
     GetPrivateProfileStringA("RAG", "source_path", cfg->rag_source_path, cfg->rag_source_path, sizeof(cfg->rag_source_path), g_config_path);
     DecodeIniUtf8Value(cfg->rag_source_path);
@@ -280,8 +395,12 @@ static void LoadConfig(AppConfig *cfg) {
     }
     GetPrivateProfileStringA("Hotkeys", "send_prompt_2", cfg->hk_send2, cfg->hk_send2, sizeof(cfg->hk_send2), g_config_path);
     GetPrivateProfileStringA("Hotkeys", "send_prompt_3", cfg->hk_send3, cfg->hk_send3, sizeof(cfg->hk_send3), g_config_path);
+    GetPrivateProfileStringA("Hotkeys", "send_prompt_4", cfg->hk_send4, cfg->hk_send4, sizeof(cfg->hk_send4), g_config_path);
+    GetPrivateProfileStringA("Hotkeys", "send_prompt_5", cfg->hk_send5, cfg->hk_send5, sizeof(cfg->hk_send5), g_config_path);
     GetPrivateProfileStringA("Hotkeys", "set_tl", cfg->hk_tl, cfg->hk_tl, sizeof(cfg->hk_tl), g_config_path);
     GetPrivateProfileStringA("Hotkeys", "set_br", cfg->hk_br, cfg->hk_br, sizeof(cfg->hk_br), g_config_path);
+    GetPrivateProfileStringA("Hotkeys", "ask_image_2", cfg->hk_img2, cfg->hk_img2, sizeof(cfg->hk_img2), g_config_path);
+    GetPrivateProfileStringA("Hotkeys", "ask_image_3", cfg->hk_img3, cfg->hk_img3, sizeof(cfg->hk_img3), g_config_path);
     GetPrivateProfileStringA("Hotkeys", "toggle_enable", cfg->hk_toggle_enable, cfg->hk_toggle_enable, sizeof(cfg->hk_toggle_enable), g_config_path);
     GetPrivateProfileStringA("Hotkeys", "toggle_visible", cfg->hk_toggle_visible, cfg->hk_toggle_visible, sizeof(cfg->hk_toggle_visible), g_config_path);
     GetPrivateProfileStringA("Hotkeys", "opacity_up", cfg->hk_opacity_up, cfg->hk_opacity_up, sizeof(cfg->hk_opacity_up), g_config_path);
@@ -309,19 +428,61 @@ static void SaveBasicConfig(const AppConfig *cfg) {
     char p1_esc[2048];
     char p2_esc[2048];
     char p3_esc[2048];
+    char p4_esc[2048];
+    char p5_esc[2048];
     char tpl_esc[4096];
+    char ep_esc[1024];
+    char key_esc[512];
+    char model_esc[256];
     WritePrivateProfileStringA("API", "endpoint", cfg->endpoint, g_config_path);
     WritePrivateProfileStringA("API", "api_key", cfg->api_key, g_config_path);
     WritePrivateProfileStringA("API", "model", cfg->model, g_config_path);
     EscapeIniValue(cfg->system_prompt, p1_esc, sizeof(p1_esc));
     EscapeIniValue(cfg->prompt_2, p2_esc, sizeof(p2_esc));
     EscapeIniValue(cfg->prompt_3, p3_esc, sizeof(p3_esc));
+    EscapeIniValue(cfg->prompt_4, p4_esc, sizeof(p4_esc));
+    EscapeIniValue(cfg->prompt_5, p5_esc, sizeof(p5_esc));
     EscapeIniValue(cfg->user_template, tpl_esc, sizeof(tpl_esc));
     WritePrivateProfileStringA("Prompt", "prompt_1", p1_esc, g_config_path);
     WritePrivateProfileStringA("Prompt", "prompt_2", p2_esc, g_config_path);
     WritePrivateProfileStringA("Prompt", "prompt_3", p3_esc, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_4", p4_esc, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_5", p5_esc, g_config_path);
     WritePrivateProfileStringA("Prompt", "system", NULL, g_config_path);
     WritePrivateProfileStringA("Prompt", "user_template", tpl_esc, g_config_path);
+    for (int i = 0; i < MAX_PROMPT_ROUTES; ++i) {
+        char key_name[64];
+        EscapeIniValue(cfg->route_prompt_endpoint[i], ep_esc, sizeof(ep_esc));
+        EscapeIniValue(cfg->route_prompt_api_key[i], key_esc, sizeof(key_esc));
+        EscapeIniValue(cfg->route_prompt_model[i], model_esc, sizeof(model_esc));
+        EscapeIniValue(cfg->route_prompt_text[i], p1_esc, sizeof(p1_esc));
+        snprintf(key_name, sizeof(key_name), "prompt_%d_endpoint", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, ep_esc, g_config_path);
+        snprintf(key_name, sizeof(key_name), "prompt_%d_api_key", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, key_esc, g_config_path);
+        snprintf(key_name, sizeof(key_name), "prompt_%d_model", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, model_esc, g_config_path);
+        snprintf(key_name, sizeof(key_name), "prompt_%d_prompt", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, p1_esc, g_config_path);
+    }
+    for (int i = 0; i < MAX_IMAGE_ROUTES; ++i) {
+        char key_name[64];
+        EscapeIniValue(cfg->route_image_endpoint[i], ep_esc, sizeof(ep_esc));
+        EscapeIniValue(cfg->route_image_api_key[i], key_esc, sizeof(key_esc));
+        EscapeIniValue(cfg->route_image_model[i], model_esc, sizeof(model_esc));
+        EscapeIniValue(cfg->route_image_prompt[i], p1_esc, sizeof(p1_esc));
+        snprintf(key_name, sizeof(key_name), "image_%d_endpoint", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, ep_esc, g_config_path);
+        snprintf(key_name, sizeof(key_name), "image_%d_api_key", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, key_esc, g_config_path);
+        snprintf(key_name, sizeof(key_name), "image_%d_model", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, model_esc, g_config_path);
+        snprintf(key_name, sizeof(key_name), "image_%d_prompt", i + 1);
+        WritePrivateProfileStringA("Routes", key_name, p1_esc, g_config_path);
+    }
+    WritePrivateProfileStringA("Routes", "image_endpoint", NULL, g_config_path);
+    WritePrivateProfileStringA("Routes", "image_api_key", NULL, g_config_path);
+    WritePrivateProfileStringA("Routes", "image_model", NULL, g_config_path);
     sprintf(tmp, "%d", cfg->overlay_enabled);
     WritePrivateProfileStringA("UI", "overlay_enabled", tmp, g_config_path);
     sprintf(tmp, "%d", cfg->overlay_visible);
@@ -333,11 +494,15 @@ static void SaveBasicConfig(const AppConfig *cfg) {
     sprintf(tmp, "%d", cfg->stream);
     WritePrivateProfileStringA("UI", "stream", tmp, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "send_prompt_1", cfg->hk_send, g_config_path);
-    WritePrivateProfileStringA("Hotkeys", "send_prompt_2", cfg->hk_send2, g_config_path);
-    WritePrivateProfileStringA("Hotkeys", "send_prompt_3", cfg->hk_send3, g_config_path);
+    WritePrivateProfileStringA("Hotkeys", "send_prompt_2", NULL, g_config_path);
+    WritePrivateProfileStringA("Hotkeys", "send_prompt_3", NULL, g_config_path);
+    WritePrivateProfileStringA("Hotkeys", "send_prompt_4", NULL, g_config_path);
+    WritePrivateProfileStringA("Hotkeys", "send_prompt_5", NULL, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "send_selected", cfg->hk_send, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "set_tl", cfg->hk_tl, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "set_br", cfg->hk_br, g_config_path);
+    WritePrivateProfileStringA("Hotkeys", "ask_image_2", NULL, g_config_path);
+    WritePrivateProfileStringA("Hotkeys", "ask_image_3", NULL, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "toggle_enable", cfg->hk_toggle_enable, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "toggle_visible", cfg->hk_toggle_visible, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "opacity_up", cfg->hk_opacity_up, g_config_path);
@@ -397,6 +562,64 @@ static void SaveAdvancedConfig(const AppConfig *cfg) {
             WritePrivateProfileStringA("Ensemble", name, NULL, g_config_path);
             snprintf(name, sizeof(name), "reviewer_%d_model", i + 1);
             WritePrivateProfileStringA("Ensemble", name, NULL, g_config_path);
+        }
+    }
+    {
+        int pruned_count = 0;
+        char ep_esc2[1024];
+        char key_esc2[512];
+        char model_esc2[256];
+        char prompt_esc2[2048];
+        char hotkey_esc2[128];
+        for (int i = 0; i < cfg->model_route_count && i < MAX_MODEL_ROUTES; ++i) {
+            if (IsBlankText(cfg->model_route_endpoint[i]) && IsBlankText(cfg->model_route_api_key[i]) &&
+                IsBlankText(cfg->model_route_model[i]) && IsBlankText(cfg->model_route_prompt[i]) &&
+                IsBlankText(cfg->model_route_hotkey[i])) {
+                continue;
+            }
+            ++pruned_count;
+            EscapeIniValue(cfg->model_route_endpoint[i], ep_esc2, sizeof(ep_esc2));
+            EscapeIniValue(cfg->model_route_api_key[i], key_esc2, sizeof(key_esc2));
+            EscapeIniValue(cfg->model_route_model[i], model_esc2, sizeof(model_esc2));
+            EscapeIniValue(cfg->model_route_prompt[i], prompt_esc2, sizeof(prompt_esc2));
+            EscapeIniValue(cfg->model_route_hotkey[i], hotkey_esc2, sizeof(hotkey_esc2));
+            {
+                char keyname[64];
+                char num[16];
+                snprintf(keyname, sizeof(keyname), "route_%d_kind", pruned_count);
+                snprintf(num, sizeof(num), "%d", cfg->model_route_kind[i] ? 1 : 0);
+                WritePrivateProfileStringA("ModelRouter", keyname, num, g_config_path);
+                snprintf(keyname, sizeof(keyname), "route_%d_endpoint", pruned_count);
+                WritePrivateProfileStringA("ModelRouter", keyname, ep_esc2, g_config_path);
+                snprintf(keyname, sizeof(keyname), "route_%d_api_key", pruned_count);
+                WritePrivateProfileStringA("ModelRouter", keyname, key_esc2, g_config_path);
+                snprintf(keyname, sizeof(keyname), "route_%d_model", pruned_count);
+                WritePrivateProfileStringA("ModelRouter", keyname, model_esc2, g_config_path);
+                snprintf(keyname, sizeof(keyname), "route_%d_prompt", pruned_count);
+                WritePrivateProfileStringA("ModelRouter", keyname, prompt_esc2, g_config_path);
+                snprintf(keyname, sizeof(keyname), "route_%d_hotkey", pruned_count);
+                WritePrivateProfileStringA("ModelRouter", keyname, hotkey_esc2, g_config_path);
+            }
+        }
+        {
+            char num[16];
+            snprintf(num, sizeof(num), "%d", pruned_count);
+            WritePrivateProfileStringA("ModelRouter", "route_count", num, g_config_path);
+        }
+        for (int i = pruned_count + 1; i <= MAX_MODEL_ROUTES; ++i) {
+            char keyname[64];
+            snprintf(keyname, sizeof(keyname), "route_%d_kind", i);
+            WritePrivateProfileStringA("ModelRouter", keyname, NULL, g_config_path);
+            snprintf(keyname, sizeof(keyname), "route_%d_endpoint", i);
+            WritePrivateProfileStringA("ModelRouter", keyname, NULL, g_config_path);
+            snprintf(keyname, sizeof(keyname), "route_%d_api_key", i);
+            WritePrivateProfileStringA("ModelRouter", keyname, NULL, g_config_path);
+            snprintf(keyname, sizeof(keyname), "route_%d_model", i);
+            WritePrivateProfileStringA("ModelRouter", keyname, NULL, g_config_path);
+            snprintf(keyname, sizeof(keyname), "route_%d_prompt", i);
+            WritePrivateProfileStringA("ModelRouter", keyname, NULL, g_config_path);
+            snprintf(keyname, sizeof(keyname), "route_%d_hotkey", i);
+            WritePrivateProfileStringA("ModelRouter", keyname, NULL, g_config_path);
         }
     }
 }
