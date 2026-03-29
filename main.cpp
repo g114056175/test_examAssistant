@@ -451,7 +451,9 @@ static void TriggerModelRouteAt(int route_index, POINT cursor) {
         StartRequestExTarget(text, "", "", cursor, 0, route_prompt, &route_target);
     } else {
         g_wait_prefix[0] = 0;
-        ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+            if (!HasVisibleText(g_overlay_text)) {
+                ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+            }
     }
     free(text);
 }
@@ -505,7 +507,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
                 }
             } else {
                 g_wait_prefix[0] = 0;
-                ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+                    if (!HasVisibleText(g_overlay_text)) {
+                        ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+                    }
             }
             free(text);
             break;

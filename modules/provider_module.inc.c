@@ -49,6 +49,7 @@ static void NormalizeFriendlyEndpointAlias(char *s, int s_size) {
 static char *ExtractJsonStringByKey(const char *json, const char *key) {
     const char *p = strstr(json, key);
     char *out;
+    size_t cap = 256;
     size_t idx = 0;
     if (!p) return NULL;
     p = strchr(p, ':');
@@ -57,21 +58,34 @@ static char *ExtractJsonStringByKey(const char *json, const char *key) {
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
     if (*p != '\"') return NULL;
     p++;
-    out = (char *)malloc(4096);
+    out = (char *)malloc(cap);
     if (!out) return NULL;
-    while (*p && idx + 1 < 4096) {
+    while (*p) {
+        char ch = 0;
         if (*p == '\\') {
             p++;
-            if (*p == 'n') out[idx++] = '\n';
-            else if (*p == 'r') out[idx++] = '\r';
-            else if (*p == 't') out[idx++] = '\t';
-            else if (*p) out[idx++] = *p;
+            if (*p == 'n') ch = '\n';
+            else if (*p == 'r') ch = '\r';
+            else if (*p == 't') ch = '\t';
+            else if (*p) ch = *p;
+            else break;
             p++;
         } else if (*p == '\"') {
             break;
         } else {
-            out[idx++] = *p++;
+            ch = *p++;
         }
+        if (idx + 1 >= cap) {
+            size_t new_cap = cap * 2;
+            char *n = (char *)realloc(out, new_cap);
+            if (!n) {
+                free(out);
+                return NULL;
+            }
+            out = n;
+            cap = new_cap;
+        }
+        out[idx++] = ch;
     }
     out[idx] = 0;
     return out;

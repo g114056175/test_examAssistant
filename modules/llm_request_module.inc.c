@@ -306,22 +306,36 @@ static char *ExtractDeltaContent(const char *json) {
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
     if (*p != '\"') return NULL;
     p++;
-    char *out = (char *)malloc(4096);
-    if (!out) return NULL;
+    size_t cap = 256;
     size_t idx = 0;
-    while (*p && idx + 1 < 4096) {
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+    while (*p) {
+        char ch = 0;
         if (*p == '\\') {
             p++;
-            if (*p == 'n') out[idx++] = '\n';
-            else if (*p == 'r') out[idx++] = '\r';
-            else if (*p == 't') out[idx++] = '\t';
-            else if (*p) out[idx++] = *p;
+            if (*p == 'n') ch = '\n';
+            else if (*p == 'r') ch = '\r';
+            else if (*p == 't') ch = '\t';
+            else if (*p) ch = *p;
+            else break;
             p++;
         } else if (*p == '\"') {
             break;
         } else {
-            out[idx++] = *p++;
+            ch = *p++;
         }
+        if (idx + 1 >= cap) {
+            size_t new_cap = cap * 2;
+            char *n = (char *)realloc(out, new_cap);
+            if (!n) {
+                free(out);
+                return NULL;
+            }
+            out = n;
+            cap = new_cap;
+        }
+        out[idx++] = ch;
     }
     out[idx] = 0;
     return out;
@@ -727,6 +741,66 @@ static int StreamChunkIndicatesDone(const char *text) {
     return 0;
 }
 
+static int AppendStreamAccum(char **stream_acc, size_t *stream_acc_len, size_t *stream_acc_cap, const char *delta) {
+    size_t dlen;
+    char *n;
+    size_t new_cap;
+    if (!stream_acc || !stream_acc_len || !stream_acc_cap || !delta || !delta[0]) return 1;
+    dlen = strlen(delta);
+    if (*stream_acc_len + dlen + 1 <= *stream_acc_cap) {
+        memcpy(*stream_acc + *stream_acc_len, delta, dlen);
+        *stream_acc_len += dlen;
+        (*stream_acc)[*stream_acc_len] = 0;
+        return 1;
+    }
+    new_cap = *stream_acc_cap ? *stream_acc_cap : 256;
+    while (*stream_acc_len + dlen + 1 > new_cap) new_cap *= 2;
+    n = (char *)realloc(*stream_acc, new_cap);
+    if (!n) return 0;
+    *stream_acc = n;
+    *stream_acc_cap = new_cap;
+    memcpy(*stream_acc + *stream_acc_len, delta, dlen);
+    *stream_acc_len += dlen;
+    (*stream_acc)[*stream_acc_len] = 0;
+    return 1;
+}
+
+static void ProcessSseLine(const char *line, size_t line_len, int *stream_done, char **stream_acc, size_t *stream_acc_len, size_t *stream_acc_cap, int req_id) {
+    size_t data_pos;
+    size_t data_len;
+    char *json_line;
+    char *delta;
+    if (!line || line_len < 5 || !stream_done) return;
+    if (strncmp(line, "data:", 5) != 0) return;
+    data_pos = 5;
+    while (data_pos < line_len && line[data_pos] == ' ') data_pos++;
+    data_len = line_len - data_pos;
+    if (data_len == 6 && strncmp(line + data_pos, "[DONE]", 6) == 0) {
+        *stream_done = 1;
+        return;
+    }
+    json_line = (char *)malloc(data_len + 1);
+    if (!json_line) return;
+    memcpy(json_line, line + data_pos, data_len);
+    json_line[data_len] = 0;
+    delta = ExtractDeltaContent(json_line);
+    free(json_line);
+    if (!delta || !delta[0]) {
+        free(delta);
+        return;
+    }
+    if (AppendStreamAccum(stream_acc, stream_acc_len, stream_acc_cap, delta)) {
+        StreamPayload *sp = (StreamPayload *)malloc(sizeof(StreamPayload));
+        if (sp) {
+            sp->text = _strdup(*stream_acc ? *stream_acc : "");
+            sp->anchor = g_wait_anchor;
+            sp->req_id = req_id;
+            PostMessage(g_hwnd_main, WM_APP_STREAM, 0, (LPARAM)sp);
+        }
+    }
+    free(delta);
+}
+
 static int ShouldRetryWithoutStream(const char *result) {
     if (!result || !result[0]) return 1;
     if (strstr(result, "LLM response had no content field.") != NULL) return 1;
@@ -747,6 +821,12 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
     if (timing) {
         if (timing->api_start_ms == 0) timing->api_start_ms = GetTickCount64();
         timing->call_count++;
+    }
+    if (!resolved.model[0]) {
+        return _strdup("Model is empty in current config/route. Request blocked to avoid server-side default model fallback.");
+    }
+    if (!resolved.endpoint[0]) {
+        return _strdup("Endpoint is empty in current config/route.");
     }
     strncpy(endpoint, resolved.endpoint, sizeof(endpoint) - 1);
     endpoint[sizeof(endpoint) - 1] = 0;
@@ -1011,49 +1091,28 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
                 }
                 while (parse_pos < total) {
                     char *nl = strchr(resp + parse_pos, '\n');
-                    if (!nl) break;
-                    size_t line_len = (size_t)(nl - (resp + parse_pos));
-                    while (line_len > 0 && (resp[parse_pos + line_len - 1] == '\r' || resp[parse_pos + line_len - 1] == '\n')) line_len--;
-                    if (line_len >= 5 && strncmp(resp + parse_pos, "data:", 5) == 0) {
-                        size_t data_pos = parse_pos + 5;
-                        while (data_pos < parse_pos + line_len && resp[data_pos] == ' ') data_pos++;
-                        if ((line_len - (data_pos - parse_pos)) == 6 && strncmp(resp + data_pos, "[DONE]", 6) == 0) {
-                            stream_done = 1;
-                        } else {
-                            char json_line[4096];
-                            size_t copy_len = line_len - (data_pos - parse_pos);
-                            if (copy_len >= sizeof(json_line)) copy_len = sizeof(json_line) - 1;
-                            memcpy(json_line, resp + data_pos, copy_len);
-                            json_line[copy_len] = 0;
-                            char *delta = ExtractDeltaContent(json_line);
-                            if (delta && delta[0]) {
-                                size_t dlen = strlen(delta);
-                                if (stream_acc_len + dlen + 1 > stream_acc_cap) {
-                                    size_t new_cap = (stream_acc_len + dlen + 1) * 2;
-                                    char *n = (char *)realloc(stream_acc, new_cap);
-                                    if (n) { stream_acc = n; stream_acc_cap = new_cap; }
-                                }
-                                if (stream_acc && stream_acc_len + dlen + 1 <= stream_acc_cap) {
-                                    memcpy(stream_acc + stream_acc_len, delta, dlen);
-                                    stream_acc_len += dlen;
-                                    stream_acc[stream_acc_len] = 0;
-                                    StreamPayload *sp = (StreamPayload *)malloc(sizeof(StreamPayload));
-                                    if (sp) {
-                                        sp->text = _strdup(stream_acc);
-                                        sp->anchor = g_wait_anchor;
-                                        sp->req_id = req_id;
-                                        PostMessage(g_hwnd_main, WM_APP_STREAM, 0, (LPARAM)sp);
-                                    }
-                                }
-                            }
-                            free(delta);
-                        }
+                    size_t line_len;
+                    if (!nl) {
+                        if (!stream_done) break;
+                        line_len = total - parse_pos;
+                    } else {
+                        line_len = (size_t)(nl - (resp + parse_pos));
                     }
-                    parse_pos = (size_t)(nl - resp) + 1;
-                    if (stream_done) break;
+                    while (line_len > 0 && (resp[parse_pos + line_len - 1] == '\r' || resp[parse_pos + line_len - 1] == '\n')) line_len--;
+                    ProcessSseLine(resp + parse_pos, line_len, &stream_done, &stream_acc, &stream_acc_len, &stream_acc_cap, req_id);
+                    if (!nl) {
+                        parse_pos = total;
+                    } else {
+                        parse_pos = (size_t)(nl - resp) + 1;
+                    }
                 }
             }
         }
+    }
+    if (use_stream && parse_pos < total) {
+        size_t line_len = total - parse_pos;
+        while (line_len > 0 && (resp[parse_pos + line_len - 1] == '\r' || resp[parse_pos + line_len - 1] == '\n')) line_len--;
+        ProcessSseLine(resp + parse_pos, line_len, &stream_done, &stream_acc, &stream_acc_len, &stream_acc_cap, req_id);
     }
     if (timing) timing->read_done_ms = GetTickCount64();
     {

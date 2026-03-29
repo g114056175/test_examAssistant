@@ -466,15 +466,24 @@ static void OpenHotkeyCaptureDialog(HWND owner, int target_id) {
     g_hotkey_capture_target_id = target_id;
     g_hotkey_capture_value[0] = 0;
     g_hwnd_hotkey_capture_owner = owner;
-    WNDCLASSA wc;
+    WNDCLASSW wc;
+    RECT rc_owner;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    const int dlg_w = 360;
+    const int dlg_h = 180;
     ZeroMemory(&wc, sizeof(wc));
     wc.lpfnWndProc = HotkeyCaptureProc;
     wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = "HotkeyCaptureWindow";
+    wc.lpszClassName = L"HotkeyCaptureWindow";
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    RegisterClassA(&wc);
-    g_hwnd_hotkey_capture = CreateWindowA(wc.lpszClassName, "Set Hotkey", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                          CW_USEDEFAULT, CW_USEDEFAULT, 360, 180, owner, NULL, wc.hInstance, NULL);
+    RegisterClassW(&wc);
+    if (owner && GetWindowRect(owner, &rc_owner)) {
+        x = rc_owner.left + 40;
+        y = rc_owner.top + 60;
+    }
+    g_hwnd_hotkey_capture = CreateWindowW(wc.lpszClassName, L"Set Hotkey", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+                                          x, y, dlg_w, dlg_h, owner, NULL, wc.hInstance, NULL);
     UnregisterHotkeys(g_hwnd_main);
     ShowWindow(g_hwnd_hotkey_capture, SW_SHOW);
     SetForegroundWindow(g_hwnd_hotkey_capture);
@@ -485,10 +494,10 @@ static void OpenHotkeyCaptureDialog(HWND owner, int target_id) {
 static LRESULT CALLBACK HotkeyCaptureProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
     case WM_CREATE:
-        CreateWindowA("STATIC", "Press a hotkey combo (e.g. Ctrl+Alt+Q):", WS_CHILD | WS_VISIBLE, 16, 16, 320, 18, hwnd, NULL, GetModuleHandle(NULL), NULL);
-        CreateWindowA("STATIC", "(waiting...)", WS_CHILD | WS_VISIBLE | WS_BORDER, 16, 42, 320, 22, hwnd, (HMENU)ID_HKCAP_PREVIEW, GetModuleHandle(NULL), NULL);
-        CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE | WS_DISABLED, 168, 86, 80, 28, hwnd, (HMENU)ID_HKCAP_SAVE, GetModuleHandle(NULL), NULL);
-        CreateWindowA("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE, 256, 86, 80, 28, hwnd, (HMENU)ID_HKCAP_CANCEL, GetModuleHandle(NULL), NULL);
+        CreateWindowW(L"STATIC", L"Press a hotkey combo (e.g. Ctrl+Alt+Q):", WS_CHILD | WS_VISIBLE, 16, 16, 320, 18, hwnd, NULL, GetModuleHandle(NULL), NULL);
+        CreateWindowW(L"STATIC", L"(waiting...)", WS_CHILD | WS_VISIBLE | WS_BORDER, 16, 42, 320, 22, hwnd, (HMENU)ID_HKCAP_PREVIEW, GetModuleHandle(NULL), NULL);
+        CreateWindowW(L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | WS_DISABLED, 168, 86, 80, 28, hwnd, (HMENU)ID_HKCAP_SAVE, GetModuleHandle(NULL), NULL);
+        CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 256, 86, 80, 28, hwnd, (HMENU)ID_HKCAP_CANCEL, GetModuleHandle(NULL), NULL);
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
@@ -501,7 +510,7 @@ static LRESULT CALLBACK HotkeyCaptureProc(HWND hwnd, UINT msg, WPARAM wparam, LP
         if (GetKeyState(VK_SHIFT) & 0x8000) mod |= MOD_SHIFT;
         if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) mod |= MOD_WIN;
         BuildHotkeyString(mod, vk, g_hotkey_capture_value, sizeof(g_hotkey_capture_value));
-        SetWindowTextA(GetDlgItem(hwnd, ID_HKCAP_PREVIEW), g_hotkey_capture_value);
+        SetDlgItemTextUtf8(hwnd, ID_HKCAP_PREVIEW, g_hotkey_capture_value);
         EnableWindow(GetDlgItem(hwnd, ID_HKCAP_SAVE), TRUE);
         return 0;
     }
@@ -553,56 +562,180 @@ static int IsPersistentControlId(int id) {
     return id == ID_BTN_TAB_BASIC || id == ID_BTN_TAB_ADV || id == ID_BTN_RESET || id == ID_BTN_SAVE;
 }
 
+static void ApplyBasicResponsiveLayout(HWND hwnd) {
+    RECT rc;
+    int cw;
+    int ch;
+    int margin = 20;
+    int field_x = 130;
+    int full_w;
+    int ask_w = 95;
+    int ask_x;
+    int quick_x = 145;
+    int quick_w;
+    int save_x;
+    int reset_x;
+    int action_y;
+    int display_y;
+    int exit_y;
+    int toggle_y;
+    int scroll_y;
+    int opacity_y;
+    int select_y;
+    int send_y;
+    int hotkey_title_y;
+
+    if (!hwnd || !GetClientRect(hwnd, &rc)) return;
+    cw = rc.right - rc.left;
+    ch = rc.bottom - rc.top;
+
+    full_w = cw - field_x - margin;
+    if (full_w < 420) full_w = 420;
+    MoveCtrl(hwnd, 101, field_x, 40, full_w, 22);
+    MoveCtrl(hwnd, 102, field_x, 72, full_w, 22);
+    MoveCtrl(hwnd, 103, field_x, 104, full_w, 22);
+    MoveCtrl(hwnd, 104, field_x, 136, full_w, 66);
+
+    ask_x = cw - margin - ask_w;
+    quick_w = ask_x - quick_x - 10;
+    if (quick_w < 240) quick_w = 240;
+    MoveCtrl(hwnd, ID_EDIT_PROMPT, quick_x, 218, quick_w, 24);
+    MoveCtrl(hwnd, ID_BTN_ASK, ask_x, 218, ask_w, 24);
+
+    save_x = cw - margin - 95;
+    reset_x = save_x - 10 - 95;
+    action_y = ch - 44;
+    MoveCtrl(hwnd, ID_BTN_RESET, reset_x, action_y, 95, 30);
+    MoveCtrl(hwnd, ID_BTN_SAVE, save_x, action_y, 95, 30);
+
+    display_y = action_y - 34;
+    MoveCtrl(hwnd, ID_LBL_THEME, 20, display_y + 2, 70, 20);
+    MoveCtrl(hwnd, 302, 95, display_y, 85, 20);
+    MoveCtrl(hwnd, ID_CHK_STREAM, 185, display_y, 85, 20);
+    MoveCtrl(hwnd, ID_CHK_DARK_THEME, 275, display_y, 65, 20);
+    MoveCtrl(hwnd, ID_LBL_OPACITY, 350, display_y + 2, 55, 20);
+    MoveCtrl(hwnd, 303, 410, display_y, cw - 410 - margin, 24);
+
+    exit_y = display_y - 34;
+    toggle_y = exit_y - 30;
+    scroll_y = toggle_y - 30;
+    opacity_y = scroll_y - 30;
+    select_y = opacity_y - 30;
+    send_y = select_y - 30;
+    hotkey_title_y = send_y - 28;
+
+    MoveCtrl(hwnd, ID_LBL_HOTKEYS, 20, hotkey_title_y, 110, 20);
+
+    MoveCtrl(hwnd, ID_LBL_SEND, 20, send_y + 2, 110, 20);
+    MoveCtrl(hwnd, 201, 130, send_y, 150, 24);
+    MoveCtrl(hwnd, ID_LBL_CANCEL, 300, send_y + 2, 100, 20);
+    MoveCtrl(hwnd, 210, 420, send_y, 150, 24);
+
+    MoveCtrl(hwnd, ID_LBL_SETTL, 20, select_y + 2, 110, 20);
+    MoveCtrl(hwnd, 202, 130, select_y, 150, 24);
+    MoveCtrl(hwnd, ID_LBL_SETBR, 300, select_y + 2, 100, 20);
+    MoveCtrl(hwnd, 203, 420, select_y, 150, 24);
+
+    MoveCtrl(hwnd, ID_LBL_OPP, 20, opacity_y + 2, 100, 20);
+    MoveCtrl(hwnd, 206, 130, opacity_y, 150, 24);
+    MoveCtrl(hwnd, ID_LBL_OPM, 300, opacity_y + 2, 100, 20);
+    MoveCtrl(hwnd, 207, 420, opacity_y, 150, 24);
+
+    MoveCtrl(hwnd, ID_LBL_SCROLLUP, 20, scroll_y + 2, 100, 20);
+    MoveCtrl(hwnd, 213, 130, scroll_y, 150, 24);
+    MoveCtrl(hwnd, ID_LBL_SCROLLDOWN, 300, scroll_y + 2, 100, 20);
+    MoveCtrl(hwnd, 214, 420, scroll_y, 150, 24);
+
+    MoveCtrl(hwnd, ID_LBL_TOGGLEVIS, 20, toggle_y + 2, 100, 20);
+    MoveCtrl(hwnd, 205, 130, toggle_y, 150, 24);
+    MoveCtrl(hwnd, ID_LBL_OPENSET, 300, toggle_y + 2, 110, 20);
+    MoveCtrl(hwnd, 208, 420, toggle_y, 150, 24);
+
+    MoveCtrl(hwnd, ID_LBL_EXIT, 20, exit_y + 2, 100, 20);
+    MoveCtrl(hwnd, 209, 130, exit_y, 150, 24);
+}
+
+static void ApplySettingsResponsiveLayout(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+    if (!g_show_advanced) {
+        ApplyBasicResponsiveLayout(hwnd);
+    } else {
+        RECT rc;
+        int cw;
+        int ch;
+        int margin = 20;
+        int save_x;
+        int reset_x;
+        int action_y;
+        if (!GetClientRect(hwnd, &rc)) return;
+        cw = rc.right - rc.left;
+        ch = rc.bottom - rc.top;
+        save_x = cw - margin - 95;
+        reset_x = save_x - 10 - 95;
+        action_y = ch - 44;
+        MoveCtrl(hwnd, ID_BTN_RESET, reset_x, action_y, 95, 30);
+        MoveCtrl(hwnd, ID_BTN_SAVE, save_x, action_y, 95, 30);
+    }
+}
+
 static void CreateBasicPageControls(HWND hwnd) {
-    CreateWindowA("STATIC", "Endpoint:", WS_CHILD | WS_VISIBLE, 20, 40, 100, 20, hwnd, (HMENU)ID_LBL_ENDPOINT, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 40, 470, 20, hwnd, (HMENU)101, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "API Key:", WS_CHILD | WS_VISIBLE, 20, 70, 100, 20, hwnd, (HMENU)ID_LBL_APIKEY, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 70, 470, 20, hwnd, (HMENU)102, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Model:", WS_CHILD | WS_VISIBLE, 20, 100, 100, 20, hwnd, (HMENU)ID_LBL_MODEL, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 100, 470, 20, hwnd, (HMENU)103, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Prompt:", WS_CHILD | WS_VISIBLE, 20, 130, 120, 20, hwnd, (HMENU)ID_LBL_SYSTEM, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 130, 470, 24, hwnd, (HMENU)104, GetModuleHandle(NULL), NULL);
+    const int left_x = 20;
+    const int field_x = 130;
+    const int right_label_x = 300;
+    const int right_field_x = 420;
+    const int row_h = 30;
 
-    CreateWindowA("STATIC", "Quick Prompt:", WS_CHILD | WS_VISIBLE, 20, 166, 120, 20, hwnd, (HMENU)ID_LBL_QUICK, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 145, 166, 375, 24, hwnd, (HMENU)ID_EDIT_PROMPT, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Endpoint:", WS_CHILD | WS_VISIBLE, left_x, 40, 100, 20, hwnd, (HMENU)ID_LBL_ENDPOINT, GetModuleHandle(NULL), NULL);
+    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, field_x, 40, 500, 22, hwnd, (HMENU)101, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "API Key:", WS_CHILD | WS_VISIBLE, left_x, 72, 100, 20, hwnd, (HMENU)ID_LBL_APIKEY, GetModuleHandle(NULL), NULL);
+    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, field_x, 72, 500, 22, hwnd, (HMENU)102, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Model:", WS_CHILD | WS_VISIBLE, left_x, 104, 100, 20, hwnd, (HMENU)ID_LBL_MODEL, GetModuleHandle(NULL), NULL);
+    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, field_x, 104, 500, 22, hwnd, (HMENU)103, GetModuleHandle(NULL), NULL);
+
+    CreateWindowA("STATIC", "Prompt:", WS_CHILD | WS_VISIBLE, left_x, 136, 120, 20, hwnd, (HMENU)ID_LBL_SYSTEM, GetModuleHandle(NULL), NULL);
+    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, field_x, 136, 500, 66, hwnd, (HMENU)104, GetModuleHandle(NULL), NULL);
+
+    CreateWindowA("STATIC", "Quick Prompt:", WS_CHILD | WS_VISIBLE, left_x, 220, 120, 20, hwnd, (HMENU)ID_LBL_QUICK, GetModuleHandle(NULL), NULL);
+    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, field_x + 15, 218, 380, 24, hwnd, (HMENU)ID_EDIT_PROMPT, GetModuleHandle(NULL), NULL);
     SendMessageA(GetDlgItem(hwnd, ID_EDIT_PROMPT), EM_LIMITTEXT, 200, 0);
-    CreateWindowA("BUTTON", "Ask", WS_CHILD | WS_VISIBLE | WS_DISABLED, 530, 166, 70, 24, hwnd, (HMENU)ID_BTN_ASK, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Ask", WS_CHILD | WS_VISIBLE | WS_DISABLED, 535, 218, 95, 24, hwnd, (HMENU)ID_BTN_ASK, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Basic Hotkeys:", WS_CHILD | WS_VISIBLE, 20, 206, 100, 20, hwnd, (HMENU)ID_LBL_HOTKEYS, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Send Prompt:", WS_CHILD | WS_VISIBLE, 20, 232, 110, 20, hwnd, (HMENU)ID_LBL_SEND, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 130, 230, 150, 24, hwnd, (HMENU)201, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Cancel Req:", WS_CHILD | WS_VISIBLE, 300, 232, 100, 20, hwnd, (HMENU)ID_LBL_CANCEL, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 420, 230, 150, 24, hwnd, (HMENU)210, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Basic Hotkeys:", WS_CHILD | WS_VISIBLE, left_x, 254, 110, 20, hwnd, (HMENU)ID_LBL_HOTKEYS, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Select Area:", WS_CHILD | WS_VISIBLE, 20, 262, 110, 20, hwnd, (HMENU)ID_LBL_SETTL, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 130, 260, 150, 24, hwnd, (HMENU)202, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Ask Image:", WS_CHILD | WS_VISIBLE, 300, 262, 100, 20, hwnd, (HMENU)ID_LBL_SETBR, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 420, 260, 150, 24, hwnd, (HMENU)203, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Send Prompt:", WS_CHILD | WS_VISIBLE, left_x, 282, 110, 20, hwnd, (HMENU)ID_LBL_SEND, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, field_x, 280, 150, 24, hwnd, (HMENU)201, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Cancel Req:", WS_CHILD | WS_VISIBLE, right_label_x, 282, 100, 20, hwnd, (HMENU)ID_LBL_CANCEL, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, right_field_x, 280, 150, 24, hwnd, (HMENU)210, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Opacity +:", WS_CHILD | WS_VISIBLE, 20, 292, 100, 20, hwnd, (HMENU)ID_LBL_OPP, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 130, 290, 150, 24, hwnd, (HMENU)206, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Opacity -:", WS_CHILD | WS_VISIBLE, 300, 292, 100, 20, hwnd, (HMENU)ID_LBL_OPM, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 420, 290, 150, 24, hwnd, (HMENU)207, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Select Area:", WS_CHILD | WS_VISIBLE, left_x, 282 + row_h, 110, 20, hwnd, (HMENU)ID_LBL_SETTL, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, field_x, 280 + row_h, 150, 24, hwnd, (HMENU)202, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Ask Image:", WS_CHILD | WS_VISIBLE, right_label_x, 282 + row_h, 100, 20, hwnd, (HMENU)ID_LBL_SETBR, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, right_field_x, 280 + row_h, 150, 24, hwnd, (HMENU)203, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Scroll Up:", WS_CHILD | WS_VISIBLE, 20, 322, 100, 20, hwnd, (HMENU)ID_LBL_SCROLLUP, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 130, 320, 150, 24, hwnd, (HMENU)213, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Scroll Down:", WS_CHILD | WS_VISIBLE, 300, 322, 100, 20, hwnd, (HMENU)ID_LBL_SCROLLDOWN, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 420, 320, 150, 24, hwnd, (HMENU)214, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Opacity +:", WS_CHILD | WS_VISIBLE, left_x, 282 + row_h * 2, 100, 20, hwnd, (HMENU)ID_LBL_OPP, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, field_x, 280 + row_h * 2, 150, 24, hwnd, (HMENU)206, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Opacity -:", WS_CHILD | WS_VISIBLE, right_label_x, 282 + row_h * 2, 100, 20, hwnd, (HMENU)ID_LBL_OPM, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, right_field_x, 280 + row_h * 2, 150, 24, hwnd, (HMENU)207, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Toggle Visible:", WS_CHILD | WS_VISIBLE, 20, 352, 100, 20, hwnd, (HMENU)ID_LBL_TOGGLEVIS, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 130, 350, 150, 24, hwnd, (HMENU)205, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Toggle Settings:", WS_CHILD | WS_VISIBLE, 300, 352, 110, 20, hwnd, (HMENU)ID_LBL_OPENSET, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 420, 350, 150, 24, hwnd, (HMENU)208, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Scroll Up:", WS_CHILD | WS_VISIBLE, left_x, 282 + row_h * 3, 100, 20, hwnd, (HMENU)ID_LBL_SCROLLUP, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, field_x, 280 + row_h * 3, 150, 24, hwnd, (HMENU)213, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Scroll Down:", WS_CHILD | WS_VISIBLE, right_label_x, 282 + row_h * 3, 100, 20, hwnd, (HMENU)ID_LBL_SCROLLDOWN, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, right_field_x, 280 + row_h * 3, 150, 24, hwnd, (HMENU)214, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Exit App:", WS_CHILD | WS_VISIBLE, 20, 382, 100, 20, hwnd, (HMENU)ID_LBL_EXIT, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, 130, 380, 150, 24, hwnd, (HMENU)209, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Toggle Visible:", WS_CHILD | WS_VISIBLE, left_x, 282 + row_h * 4, 100, 20, hwnd, (HMENU)ID_LBL_TOGGLEVIS, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, field_x, 280 + row_h * 4, 150, 24, hwnd, (HMENU)205, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Toggle Settings:", WS_CHILD | WS_VISIBLE, right_label_x, 282 + row_h * 4, 110, 20, hwnd, (HMENU)ID_LBL_OPENSET, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, right_field_x, 280 + row_h * 4, 150, 24, hwnd, (HMENU)208, GetModuleHandle(NULL), NULL);
 
-    CreateWindowA("STATIC", "Display:", WS_CHILD | WS_VISIBLE, 20, 418, 70, 20, hwnd, NULL, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Visible", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 95, 416, 85, 20, hwnd, (HMENU)302, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Stream", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 185, 416, 85, 20, hwnd, (HMENU)ID_CHK_STREAM, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Dark", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 275, 416, 65, 20, hwnd, (HMENU)ID_CHK_DARK_THEME, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Opacity:", WS_CHILD | WS_VISIBLE, 350, 418, 55, 20, hwnd, (HMENU)ID_LBL_OPACITY, GetModuleHandle(NULL), NULL);
-    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER, 410, 416, 190, 22, hwnd, (HMENU)303, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Exit App:", WS_CHILD | WS_VISIBLE, left_x, 282 + row_h * 5, 100, 20, hwnd, (HMENU)ID_LBL_EXIT, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "", WS_CHILD | WS_VISIBLE, field_x, 280 + row_h * 5, 150, 24, hwnd, (HMENU)209, GetModuleHandle(NULL), NULL);
+
+    CreateWindowA("STATIC", "Display:", WS_CHILD | WS_VISIBLE, left_x, 470, 70, 20, hwnd, (HMENU)ID_LBL_THEME, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Visible", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 95, 468, 85, 20, hwnd, (HMENU)302, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Stream", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 185, 468, 85, 20, hwnd, (HMENU)ID_CHK_STREAM, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Dark", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 275, 468, 65, 20, hwnd, (HMENU)ID_CHK_DARK_THEME, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Opacity:", WS_CHILD | WS_VISIBLE, 350, 470, 55, 20, hwnd, (HMENU)ID_LBL_OPACITY, GetModuleHandle(NULL), NULL);
+    CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER, 410, 468, 220, 24, hwnd, (HMENU)303, GetModuleHandle(NULL), NULL);
 }
 
 static void CreateAdvancedPageControls(HWND hwnd) {
@@ -653,6 +786,7 @@ static void RebuildPageControls(HWND hwnd) {
     else CreateBasicPageControls(hwnd);
 
     ApplyConfigToSettingsControls(hwnd, &g_cfg);
+    ApplySettingsResponsiveLayout(hwnd);
     if (!g_show_advanced) EnableWindow(GetDlgItem(hwnd, ID_BTN_ASK), !g_req_inflight && GetWindowTextLengthA(GetDlgItem(hwnd, ID_EDIT_PROMPT)) > 0);
     RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
@@ -671,15 +805,24 @@ static void BuildSettingsLayout(HWND hwnd) {
     while ((c = GetWindow(hwnd, GW_CHILD)) != NULL) DestroyWindow(c);
     CreateWindowA("BUTTON", g_show_advanced ? "Basic" : "[Basic]", WS_CHILD | WS_VISIBLE, 20, 10, 90, 22, hwnd, (HMENU)ID_BTN_TAB_BASIC, GetModuleHandle(NULL), NULL);
     CreateWindowA("BUTTON", g_show_advanced ? "[Advanced]" : "Advanced", WS_CHILD | WS_VISIBLE, 115, 10, 90, 22, hwnd, (HMENU)ID_BTN_TAB_ADV, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Reset", WS_CHILD | WS_VISIBLE, 400, 458, 95, 28, hwnd, (HMENU)ID_BTN_RESET, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE, 505, 458, 95, 28, hwnd, (HMENU)ID_BTN_SAVE, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Reset", WS_CHILD | WS_VISIBLE, 430, 482, 95, 30, hwnd, (HMENU)ID_BTN_RESET, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Save", WS_CHILD | WS_VISIBLE, 535, 482, 95, 30, hwnd, (HMENU)ID_BTN_SAVE, GetModuleHandle(NULL), NULL);
     RebuildPageControls(hwnd);
 }
 
 static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *mmi = (MINMAXINFO *)lparam;
+        if (mmi) {
+            mmi->ptMinTrackSize.x = 680;
+            mmi->ptMinTrackSize.y = 590;
+        }
+        return 0;
+    }
     case WM_SIZE:
         if (wparam == SIZE_MINIMIZED) { HideOverlay(); ShowWindow(hwnd, SW_HIDE); return 0; }
+        ApplySettingsResponsiveLayout(hwnd);
         break;
     case WM_SHOWWINDOW:
         if (wparam) SetWindowTextW(hwnd, L"Helper");
@@ -895,6 +1038,6 @@ static void CreateSettingsWindow(HWND owner) {
     RegisterClassW(&wc);
     g_hwnd_settings = CreateWindowW(wc.lpszClassName, L"Helper",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                                    100, 100, 640, 565, NULL, NULL, wc.hInstance, NULL);
+                                    100, 100, 680, 590, NULL, NULL, wc.hInstance, NULL);
     BuildSettingsLayout(g_hwnd_settings);
 }

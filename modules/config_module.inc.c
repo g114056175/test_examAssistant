@@ -3,7 +3,7 @@ static void ConfigDefaults(AppConfig *cfg) {
     strcpy(cfg->endpoint, "");
     strcpy(cfg->api_key, "");
     strcpy(cfg->model, "");
-    strcpy(cfg->system_prompt, "Reply in Traditional Chinese. Plain text only. Give the direct answer only, no explanation. If and only if the question is multiple-choice, answer with selected options like: (A) (C). For non-multiple-choice questions, reply with normal direct text answer.");
+    strcpy(cfg->system_prompt, "Reply in Traditional Chinese. You are a strict exam-answering assistant. Determine question type first. If multiple-choice, output one answer per question with numbering, each on a new line, for example: 1. (A) 2. (B)(D). If non-multiple-choice, output concise direct answers with numbering, one line per question. The number of output lines must equal the number of questions; never omit any question. If information is insufficient or ambiguous, output 'insufficient information' for that item. Do not guess. Output final answers only.");
     strcpy(cfg->prompt_2, "Reply in Traditional Chinese. Plain text only. Give the answer first, then add a short and simple explanation.");
     strcpy(cfg->prompt_3, "Reply in Traditional Chinese. Plain text only. Give the answer first, then provide a detailed explanation with key reasoning and conclusion.");
     strcpy(cfg->prompt_4, "Reply in Traditional Chinese. Plain text only. Answer directly and keep it short.");
