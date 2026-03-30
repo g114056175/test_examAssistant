@@ -466,7 +466,10 @@ static void ApplyRuntimeConfigFromControls(HWND hwnd) {
     if (GetDlgItem(hwnd, ID_CHK_STREAM)) g_cfg.stream = (IsDlgButtonChecked(hwnd, ID_CHK_STREAM) == BST_CHECKED);
     if (GetDlgItem(hwnd, 303)) {
         GetWindowTextA(GetDlgItem(hwnd, 303), obuf, sizeof(obuf));
-        g_cfg.opacity = ClampInt(atoi(obuf), 30, 255);
+        {
+            int op = ParsePositiveIntAscii(obuf);
+            g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 30, 255);
+        }
         if (g_hwnd_overlay) SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA);
     }
     if (GetDlgItem(hwnd, ID_CHK_DARK_THEME)) g_cfg.theme_light = (IsDlgButtonChecked(hwnd, ID_CHK_DARK_THEME) == BST_CHECKED) ? 0 : 1;
@@ -955,7 +958,10 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             if (g_loading_controls) return 0;
             char obuf[32];
             GetWindowTextA(GetDlgItem(hwnd, 303), obuf, sizeof(obuf));
-            g_cfg.opacity = ClampInt(atoi(obuf), 30, 255);
+            {
+                int op = ParsePositiveIntAscii(obuf);
+                g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 30, 255);
+            }
             if (g_hwnd_overlay) { SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA); InvalidateRect(g_hwnd_overlay, NULL, TRUE); }
             g_settings_dirty = 1;
             return 0;
