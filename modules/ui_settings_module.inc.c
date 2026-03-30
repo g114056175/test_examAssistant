@@ -1,5 +1,7 @@
 static int g_route_kind = 0;
 static int g_route_index = -1;
+static char g_quick_prompt_text[2048] = "";
+static const char *k_default_quick_prompt = "Test LLM prompt: please reply alive.";
 
 static void SetDlgItemTextUtf8(HWND hwnd, int id, const char *utf8) {
     HWND ctrl = GetDlgItem(hwnd, id);
@@ -45,6 +47,24 @@ static void UpdateRagControlsEnabled(HWND hwnd) {
     if (GetDlgItem(hwnd, ID_LBL_RAG_PATH)) EnableWindow(GetDlgItem(hwnd, ID_LBL_RAG_PATH), enabled);
     if (GetDlgItem(hwnd, ID_EDIT_RAG_PATH)) EnableWindow(GetDlgItem(hwnd, ID_EDIT_RAG_PATH), enabled);
     if (GetDlgItem(hwnd, ID_BTN_BROWSE_RAG)) EnableWindow(GetDlgItem(hwnd, ID_BTN_BROWSE_RAG), enabled);
+}
+
+static int IsSupportedRagPathUtf8(const char *path_utf8) {
+    wchar_t path_w[1024];
+    DWORD attr;
+    const wchar_t *dot;
+    if (!path_utf8 || !path_utf8[0]) return 1;
+    if (!Utf8ToWide(path_utf8, path_w, (int)(sizeof(path_w) / sizeof(path_w[0])))) return 0;
+    attr = GetFileAttributesW(path_w);
+    if (attr == INVALID_FILE_ATTRIBUTES) {
+        dot = wcsrchr(path_w, L'.');
+        if (!dot) return 1;
+        return _wcsicmp(dot, L".txt") == 0 || _wcsicmp(dot, L".md") == 0;
+    }
+    if (attr & FILE_ATTRIBUTE_DIRECTORY) return 1;
+    dot = wcsrchr(path_w, L'.');
+    if (!dot) return 0;
+    return _wcsicmp(dot, L".txt") == 0 || _wcsicmp(dot, L".md") == 0;
 }
 
 static int IsModelRouteAllBlankAt(const AppConfig *cfg, int idx) {
@@ -253,11 +273,11 @@ static int BrowseRagSourceWithDialog(HWND hwnd, int pick_folder) {
     if (pick_folder) options |= FOS_PICKFOLDERS;
     else options |= FOS_FILEMUSTEXIST;
     dialog->SetOptions(options);
-    Utf8ToWide(pick_folder ? "Select RAG Source Folder" : "Select RAG Source File", title, (int)(sizeof(title) / sizeof(title[0])));
+    Utf8ToWide(pick_folder ? "Select Reference Data Folder (.txt/.md files)" : "Select Reference Data File (.txt/.md)", title, (int)(sizeof(title) / sizeof(title[0])));
     dialog->SetTitle(title);
     if (!pick_folder) {
         COMDLG_FILTERSPEC filters[] = {
-            {L"Supported Files", L"*.txt;*.md;*.pdf;*.ppt;*.pptx"},
+            {L"Supported Files", L"*.txt;*.md"},
             {L"All Files", L"*.*"}
         };
         dialog->SetFileTypes((UINT)(sizeof(filters) / sizeof(filters[0])), filters);
@@ -401,8 +421,12 @@ static void ApplyConfigToSettingsControls(HWND hwnd, const AppConfig *cfg) {
 
     LoadModelRouteEditor(hwnd);
 
-    if (GetDlgItem(hwnd, ID_EDIT_PROMPT) && GetWindowTextLengthA(GetDlgItem(hwnd, ID_EDIT_PROMPT)) == 0) {
-        SetWindowTextA(GetDlgItem(hwnd, ID_EDIT_PROMPT), "Test LLM prompt: please reply alive.");
+    if (GetDlgItem(hwnd, ID_EDIT_PROMPT)) {
+        if (!g_quick_prompt_text[0]) {
+            strncpy(g_quick_prompt_text, k_default_quick_prompt, sizeof(g_quick_prompt_text) - 1);
+            g_quick_prompt_text[sizeof(g_quick_prompt_text) - 1] = 0;
+        }
+        SetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, g_quick_prompt_text);
     }
     UpdateRagControlsEnabled(hwnd);
     g_loading_controls = 0;
@@ -739,9 +763,9 @@ static void CreateBasicPageControls(HWND hwnd) {
 }
 
 static void CreateAdvancedPageControls(HWND hwnd) {
-    CreateWindowA("STATIC", "RAG:", WS_CHILD | WS_VISIBLE, 20, 50, 100, 20, hwnd, (HMENU)ID_LBL_RAG, GetModuleHandle(NULL), NULL);
-    CreateWindowA("BUTTON", "Enable RAG reference source", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 130, 48, 220, 22, hwnd, (HMENU)ID_CHK_RAG_ENABLED, GetModuleHandle(NULL), NULL);
-    CreateWindowA("STATIC", "Data Source:", WS_CHILD | WS_VISIBLE, 20, 80, 100, 20, hwnd, (HMENU)ID_LBL_RAG_PATH, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Reference Data:", WS_CHILD | WS_VISIBLE, 20, 50, 110, 20, hwnd, (HMENU)ID_LBL_RAG, GetModuleHandle(NULL), NULL);
+    CreateWindowA("BUTTON", "Enable reference data", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 130, 48, 220, 22, hwnd, (HMENU)ID_CHK_RAG_ENABLED, GetModuleHandle(NULL), NULL);
+    CreateWindowA("STATIC", "Source Path:", WS_CHILD | WS_VISIBLE, 20, 80, 100, 20, hwnd, (HMENU)ID_LBL_RAG_PATH, GetModuleHandle(NULL), NULL);
     CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 130, 78, 385, 24, hwnd, (HMENU)ID_EDIT_RAG_PATH, GetModuleHandle(NULL), NULL);
     CreateWindowA("BUTTON", "Browse...", WS_CHILD | WS_VISIBLE, 525, 77, 75, 24, hwnd, (HMENU)ID_BTN_BROWSE_RAG, GetModuleHandle(NULL), NULL);
 
@@ -771,6 +795,9 @@ static void CreateAdvancedPageControls(HWND hwnd) {
 static void RebuildPageControls(HWND hwnd) {
     HWND to_delete[512];
     int del_count = 0;
+    if (GetDlgItem(hwnd, ID_EDIT_PROMPT)) {
+        GetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, g_quick_prompt_text, sizeof(g_quick_prompt_text));
+    }
     HWND c = GetWindow(hwnd, GW_CHILD);
     while (c && del_count < (int)(sizeof(to_delete) / sizeof(to_delete[0]))) {
         int id = GetDlgCtrlID(c);
@@ -955,6 +982,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         }
 
         if (id == ID_EDIT_PROMPT && HIWORD(wparam) == EN_CHANGE) {
+            GetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, g_quick_prompt_text, sizeof(g_quick_prompt_text));
             EnableWindow(GetDlgItem(hwnd, ID_BTN_ASK), !g_req_inflight && GetWindowTextLengthA(GetDlgItem(hwnd, ID_EDIT_PROMPT)) > 0);
             return 0;
         }
@@ -976,6 +1004,13 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             ApplyRuntimeConfigFromControls(hwnd);
             SaveModelRouteEditor(hwnd);
             PruneBlankModelRoutes(&g_cfg);
+            if (g_cfg.rag_enabled && !IsSupportedRagPathUtf8(g_cfg.rag_source_path)) {
+                MessageBoxA(hwnd,
+                            "Reference data only supports .txt/.md file or folder path.\nPlease convert PDF/PPT to TXT/MD first, then retry.",
+                            "Reference Data Validation",
+                            MB_OK | MB_ICONWARNING);
+                return 0;
+            }
             if (!ValidateHotkeyControls(hwnd, 0, NULL, hk_err, sizeof(hk_err))) { MessageBoxA(hwnd, hk_err, "Hotkey Validation", MB_OK | MB_ICONWARNING); return 0; }
             if (!ValidateModelRouteHotkeys(hwnd, hk_err, sizeof(hk_err))) { MessageBoxA(hwnd, hk_err, "Hotkey Validation", MB_OK | MB_ICONWARNING); return 0; }
             if (MessageBoxA(hwnd, "Save settings to config.ini now?", "Confirm Save", MB_YESNO | MB_ICONQUESTION) != IDYES) return 0;
@@ -993,7 +1028,16 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         if (id == ID_BTN_ASK) {
             char prompt[2048];
             POINT cursor;
+            LlmTargetConfig route_target;
             if (g_req_inflight) return 0;
+            ApplyRuntimeConfigFromControls(hwnd);
+            if (g_cfg.rag_enabled && !IsSupportedRagPathUtf8(g_cfg.rag_source_path)) {
+                MessageBoxA(hwnd,
+                            "Reference data only supports .txt/.md file or folder path.\nPlease convert PDF/PPT to TXT/MD first, then retry.",
+                            "Reference Data Validation",
+                            MB_OK | MB_ICONWARNING);
+                return 0;
+            }
             GetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, prompt, sizeof(prompt));
             GetCursorPos(&cursor);
             if (prompt[0]) {
@@ -1001,7 +1045,11 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
                 g_wait_prefix[0] = 0;
                 EnableWindow(GetDlgItem(hwnd, ID_BTN_ASK), 0);
                 SetWindowTextA(GetDlgItem(hwnd, ID_BTN_ASK), "Asking...");
-                StartRequestEx(prompt, "__RAW__", "", cursor, 1, g_cfg.system_prompt);
+                if (ResolveRouteTargetConfig(0, &route_target)) {
+                    StartRequestExTarget(prompt, "__RAW__", "", cursor, 1, SYSTEM_PROMPT_NONE_TAG, &route_target);
+                } else {
+                    StartRequestEx(prompt, "__RAW__", "", cursor, 1, SYSTEM_PROMPT_NONE_TAG);
+                }
             }
             return 0;
         }
@@ -1009,6 +1057,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         if (id == ID_BTN_RESET) {
             if (MessageBoxA(hwnd, "Reset current settings to built-in defaults? This will not save to config.ini until you press Save.", "Confirm Reset", MB_YESNO | MB_ICONWARNING) == IDYES) {
                 ConfigDefaults(&g_cfg);
+                g_quick_prompt_text[0] = 0;
                 g_route_index = -1;
                 g_route_kind = 0;
                 ApplyConfigToSettingsControls(hwnd, &g_cfg);

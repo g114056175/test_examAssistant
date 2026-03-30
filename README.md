@@ -72,6 +72,12 @@ Endpoint shortcuts in settings:
 - `config.ini` stores API and UI settings.
 - `config.ini` should remain local/private and is ignored by git.
 
+## Reference Data (RAG-like)
+
+- Reference Data in Advanced settings accepts only `.txt` and `.md` sources.
+- PDF/PPT files must be converted to `.txt` or `.md` first, then used as source path.
+- You can select a single `.txt/.md` file or a folder that contains `.txt/.md` files.
+
 ## Known Limitation (Security)
 
 - API keys in `config.ini` are currently not encrypted.
@@ -82,4 +88,4 @@ Endpoint shortcuts in settings:
 
 - Overlay is click-through and non-activating.
 - Image requests are sent as PNG captures.
-- RAG source support remains available in Advanced.
+- Reference Data support remains available in Advanced (`.txt` / `.md` only).

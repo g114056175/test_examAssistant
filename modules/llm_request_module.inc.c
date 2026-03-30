@@ -41,10 +41,289 @@ static char *ReadFileBase64(const char *path) {
     return out;
 }
 
+#define MAX_RAG_ATTACH_FILES 8
+#define MAX_RAG_ATTACH_DEPTH 3
+#define MAX_RAG_TEXT_CHARS 14000
+
+static int g_rag_last_truncated = 0;
+
+static void NormalizeRagReferenceTextInPlace(char *text) {
+    char *src;
+    char *dst;
+    int blank_run = 0;
+    if (!text || !text[0]) return;
+    src = text;
+    dst = text;
+    while (*src) {
+        if (src[0] == '$' && src[1] == '$') {
+            src += 2;
+            while (*src && !(src[0] == '$' && src[1] == '$')) src++;
+            if (*src) src += 2;
+            memcpy(dst, "[formula]", 9);
+            dst += 9;
+            continue;
+        }
+        if (src[0] == '$') {
+            src++;
+            while (*src && src[0] != '$') src++;
+            if (*src == '$') src++;
+            memcpy(dst, "(formula)", 9);
+            dst += 9;
+            continue;
+        }
+        if (src[0] == '\r') {
+            src++;
+            continue;
+        }
+        if (src[0] == '\n') {
+            blank_run++;
+            if (blank_run <= 2) *dst++ = *src;
+            src++;
+            continue;
+        }
+        blank_run = 0;
+        if (src[0] == '*' && src[1] == '*') {
+            src += 2;
+            continue;
+        }
+        if (src[0] == '`') {
+            src++;
+            continue;
+        }
+        *dst++ = *src++;
+    }
+    *dst = 0;
+}
+
+static char *ReadFileBase64W(const wchar_t *path) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    LARGE_INTEGER size_li;
+    DWORD read = 0;
+    BYTE *bytes = NULL;
+    DWORD out_len = 0;
+    char *out = NULL;
+    if (file == INVALID_HANDLE_VALUE) return NULL;
+    if (!GetFileSizeEx(file, &size_li) || size_li.QuadPart <= 0 || size_li.QuadPart > 20 * 1024 * 1024) {
+        CloseHandle(file);
+        return NULL;
+    }
+    bytes = (BYTE *)malloc((size_t)size_li.QuadPart);
+    if (!bytes) {
+        CloseHandle(file);
+        return NULL;
+    }
+    if (!ReadFile(file, bytes, (DWORD)size_li.QuadPart, &read, NULL) || read != (DWORD)size_li.QuadPart) {
+        CloseHandle(file);
+        free(bytes);
+        return NULL;
+    }
+    CloseHandle(file);
+    if (!CryptBinaryToStringA(bytes, read, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &out_len)) {
+        free(bytes);
+        return NULL;
+    }
+    out = (char *)malloc(out_len + 1);
+    if (!out) {
+        free(bytes);
+        return NULL;
+    }
+    if (!CryptBinaryToStringA(bytes, read, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, out, &out_len)) {
+        free(bytes);
+        free(out);
+        return NULL;
+    }
+    out[out_len] = 0;
+    free(bytes);
+    return out;
+}
+
+static int IsSupportedRagAttachExtensionW(const wchar_t *name) {
+    const wchar_t *dot = wcsrchr(name, L'.');
+    if (!dot) return 0;
+    return _wcsicmp(dot, L".pdf") == 0 ||
+           _wcsicmp(dot, L".txt") == 0 ||
+           _wcsicmp(dot, L".md") == 0 ||
+           _wcsicmp(dot, L".ppt") == 0 ||
+           _wcsicmp(dot, L".pptx") == 0;
+}
+
+static const char *GetMimeTypeByPathW(const wchar_t *path) {
+    const wchar_t *dot = wcsrchr(path, L'.');
+    if (!dot) return "application/octet-stream";
+    if (_wcsicmp(dot, L".pdf") == 0) return "application/pdf";
+    if (_wcsicmp(dot, L".txt") == 0) return "text/plain";
+    if (_wcsicmp(dot, L".md") == 0) return "text/markdown";
+    if (_wcsicmp(dot, L".ppt") == 0) return "application/vnd.ms-powerpoint";
+    if (_wcsicmp(dot, L".pptx") == 0) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    return "application/octet-stream";
+}
+
+static void CollectRagAttachFilesW(const wchar_t *path, wchar_t out_paths[][MAX_PATH], int *count, int depth) {
+    DWORD attr;
+    if (!path || !path[0] || !out_paths || !count || depth > MAX_RAG_ATTACH_DEPTH || *count >= MAX_RAG_ATTACH_FILES) return;
+    attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES) return;
+    if (attr & FILE_ATTRIBUTE_DIRECTORY) {
+        wchar_t pattern[MAX_PATH];
+        WIN32_FIND_DATAW fd;
+        HANDLE hfind;
+        swprintf(pattern, MAX_PATH, L"%ls\\*", path);
+        hfind = FindFirstFileW(pattern, &fd);
+        if (hfind == INVALID_HANDLE_VALUE) return;
+        do {
+            wchar_t child[MAX_PATH];
+            if (*count >= MAX_RAG_ATTACH_FILES) break;
+            if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+            swprintf(child, MAX_PATH, L"%ls\\%ls", path, fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                CollectRagAttachFilesW(child, out_paths, count, depth + 1);
+            } else if (IsSupportedRagAttachExtensionW(fd.cFileName)) {
+                wcsncpy(out_paths[*count], child, MAX_PATH - 1);
+                out_paths[*count][MAX_PATH - 1] = 0;
+                (*count)++;
+            }
+        } while (FindNextFileW(hfind, &fd));
+        FindClose(hfind);
+        return;
+    }
+    if (!IsSupportedRagAttachExtensionW(path)) return;
+    wcsncpy(out_paths[*count], path, MAX_PATH - 1);
+    out_paths[*count][MAX_PATH - 1] = 0;
+    (*count)++;
+}
+
+static int LoadRagAttachFilesW(wchar_t out_paths[][MAX_PATH], int *out_count) {
+    wchar_t path_w[1024];
+    int count = 0;
+    if (!out_paths || !out_count) return 0;
+    *out_count = 0;
+    if (!g_cfg.rag_enabled || !g_cfg.rag_source_path[0]) return 0;
+    if (!Utf8ToWide(g_cfg.rag_source_path, path_w, (int)(sizeof(path_w) / sizeof(path_w[0])))) return 0;
+    CollectRagAttachFilesW(path_w, out_paths, &count, 0);
+    *out_count = count;
+    return count > 0;
+}
+
 static int HasSupportedRagExtensionW(const wchar_t *name) {
     const wchar_t *dot = wcsrchr(name, L'.');
     if (!dot) return 0;
     return _wcsicmp(dot, L".txt") == 0 || _wcsicmp(dot, L".md") == 0;
+}
+
+static int ReadUtf8TextFileW(const wchar_t *path, char **out);
+
+static int IsPdfExtensionW(const wchar_t *name) {
+    const wchar_t *dot = wcsrchr(name, L'.');
+    return dot && _wcsicmp(dot, L".pdf") == 0;
+}
+
+static char *ToUtf8BestEffort(const char *src) {
+    int wneed;
+    wchar_t *wtmp;
+    int need;
+    char *utf8;
+    if (!src) return NULL;
+    wneed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, src, -1, NULL, 0);
+    if (wneed > 0) {
+        return _strdup(src);
+    }
+    wneed = MultiByteToWideChar(CP_ACP, 0, src, -1, NULL, 0);
+    if (wneed <= 0) return _strdup(src);
+    wtmp = (wchar_t *)malloc(sizeof(wchar_t) * wneed);
+    if (!wtmp) return _strdup(src);
+    if (MultiByteToWideChar(CP_ACP, 0, src, -1, wtmp, wneed) <= 0) {
+        free(wtmp);
+        return _strdup(src);
+    }
+    need = WideCharToMultiByte(CP_UTF8, 0, wtmp, -1, NULL, 0, NULL, NULL);
+    if (need <= 0) {
+        free(wtmp);
+        return _strdup(src);
+    }
+    utf8 = (char *)malloc(need);
+    if (!utf8) {
+        free(wtmp);
+        return _strdup(src);
+    }
+    WideCharToMultiByte(CP_UTF8, 0, wtmp, -1, utf8, need, NULL, NULL);
+    free(wtmp);
+    return utf8;
+}
+
+static void StripUnsupportedControlChars(char *s) {
+    char *src;
+    char *dst;
+    if (!s) return;
+    src = s;
+    dst = s;
+    while (*src) {
+        unsigned char c = (unsigned char)*src;
+        if (c < 32 && c != '\n' && c != '\r' && c != '\t') {
+            src++;
+            continue;
+        }
+        *dst++ = *src++;
+    }
+    *dst = 0;
+}
+
+static int ReadPdfTextWithPdftotextW(const wchar_t *path, char **out) {
+    wchar_t exe_path[MAX_PATH];
+    DWORD found;
+    wchar_t temp_dir[MAX_PATH];
+    wchar_t out_txt[MAX_PATH];
+    wchar_t cmd[4096];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    DWORD wait_rc;
+    char *text = NULL;
+    if (!out) return 0;
+    *out = NULL;
+
+    found = SearchPathW(NULL, L"pdftotext.exe", NULL, MAX_PATH, exe_path, NULL);
+    if (found == 0 || found >= MAX_PATH) return 0;
+    if (!GetTempPathW(MAX_PATH, temp_dir) || !temp_dir[0]) return 0;
+    if (!GetTempFileNameW(temp_dir, L"rag", 0, out_txt)) return 0;
+    {
+        wchar_t *dot = wcsrchr(out_txt, L'.');
+        if (dot) wcscpy(dot, L".txt");
+    }
+
+    swprintf(cmd, sizeof(cmd) / sizeof(cmd[0]),
+             L"\"%ls\" -enc UTF-8 -nopgbrk \"%ls\" \"%ls\"",
+             exe_path, path, out_txt);
+
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
+    si.cb = sizeof(si);
+    if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        DeleteFileW(out_txt);
+        return 0;
+    }
+
+    wait_rc = WaitForSingleObject(pi.hProcess, 30000);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (wait_rc != WAIT_OBJECT_0) {
+        DeleteFileW(out_txt);
+        return 0;
+    }
+
+    if (!ReadUtf8TextFileW(out_txt, &text) || !text || !HasVisibleText(text)) {
+        free(text);
+        DeleteFileW(out_txt);
+        return 0;
+    }
+    StripUnsupportedControlChars(text);
+    if (!HasVisibleText(text)) {
+        free(text);
+        DeleteFileW(out_txt);
+        return 0;
+    }
+
+    DeleteFileW(out_txt);
+    *out = text;
+    return 1;
 }
 
 static int AppendTextWithCap(char **buf, size_t *len, size_t *cap, const char *text, size_t text_len, size_t max_total) {
@@ -65,6 +344,39 @@ static int AppendTextWithCap(char **buf, size_t *len, size_t *cap, const char *t
     *len += text_len;
     (*buf)[*len] = 0;
     return 1;
+}
+
+static int AppendRagTextWithCap(char **buf, size_t *len, size_t *cap, const char *text, size_t text_len, size_t max_total, int *truncated) {
+    if (!buf || !len || !cap || !text) return 0;
+    if (*len >= max_total) {
+        if (truncated) *truncated = 1;
+        return 1;
+    }
+    if (*len + text_len + 1 > max_total) {
+        size_t allowed = max_total - *len - 1;
+        if (allowed > 0 && allowed < text_len) {
+            size_t cut = allowed;
+            size_t start = (cut > 240) ? (cut - 240) : 0;
+            for (size_t i = cut; i > start; --i) {
+                if (text[i - 1] == '\n') {
+                    cut = i;
+                    break;
+                }
+            }
+            while (cut > 0 && (((unsigned char)text[cut] & 0xC0) == 0x80)) cut--;
+            text_len = cut;
+        } else {
+            text_len = allowed;
+        }
+        if (truncated) *truncated = 1;
+    }
+    return AppendTextWithCap(buf, len, cap, text, text_len, max_total);
+}
+
+static int AppendTextStrict(char **buf, size_t *len, size_t *cap, const char *text, size_t text_len, size_t max_total) {
+    if (!buf || !len || !cap || !text) return 0;
+    if (*len + text_len + 1 > max_total) return 0;
+    return AppendTextWithCap(buf, len, cap, text, text_len, max_total);
 }
 
 static int ReadUtf8TextFileW(const wchar_t *path, char **out) {
@@ -123,9 +435,137 @@ static int ReadUtf8TextFileW(const wchar_t *path, char **out) {
     return utf8 != NULL;
 }
 
+static int ReadPdfTextFileW(const wchar_t *path, char **out) {
+    if (ReadPdfTextWithPdftotextW(path, out)) return 1;
+
+    /*
+     * Fallback parser is intentionally conservative: we avoid pushing noisy binary-like
+     * fragments into RAG context because they can break JSON/quality. If pdftotext is
+     * unavailable, caller will receive no PDF text and can surface a clear note instead.
+     */
+    if (out) *out = NULL;
+    return 0;
+
+    /* legacy experimental parser kept below but disabled */
+    HANDLE file;
+    LARGE_INTEGER size_li;
+    DWORD read = 0;
+    unsigned char *bytes = NULL;
+    char *buf = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    if (!out) return 0;
+    *out = NULL;
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!GetFileSizeEx(file, &size_li) || size_li.QuadPart <= 0 || size_li.QuadPart > 16 * 1024 * 1024) {
+        CloseHandle(file);
+        return 0;
+    }
+    bytes = (unsigned char *)malloc((size_t)size_li.QuadPart + 1);
+    if (!bytes) {
+        CloseHandle(file);
+        return 0;
+    }
+    if (!ReadFile(file, bytes, (DWORD)size_li.QuadPart, &read, NULL) || read == 0) {
+        CloseHandle(file);
+        free(bytes);
+        return 0;
+    }
+    CloseHandle(file);
+    bytes[read] = 0;
+
+    for (size_t i = 0; i < (size_t)read && len < 12000; ++i) {
+        if (bytes[i] != '(') continue;
+        i++;
+        {
+            int depth = 1;
+            char token[2048];
+            size_t tlen = 0;
+            while (i < (size_t)read && depth > 0) {
+                unsigned char c = bytes[i++];
+                if (c == '\\' && i < (size_t)read) {
+                    unsigned char e = bytes[i++];
+                    char decoded;
+                    if (e == 'n') decoded = '\n';
+                    else if (e == 'r') decoded = '\r';
+                    else if (e == 't') decoded = '\t';
+                    else if (e == 'b') decoded = '\b';
+                    else if (e == 'f') decoded = '\f';
+                    else if (e == '(') decoded = '(';
+                    else if (e == ')') decoded = ')';
+                    else if (e == '\\') decoded = '\\';
+                    else if (e >= '0' && e <= '7') {
+                        int value = e - '0';
+                        int count = 1;
+                        while (count < 3 && i < (size_t)read && bytes[i] >= '0' && bytes[i] <= '7') {
+                            value = value * 8 + (bytes[i] - '0');
+                            ++i;
+                            ++count;
+                        }
+                        decoded = (char)value;
+                    } else {
+                        decoded = (char)e;
+                    }
+                    if (depth == 1 && tlen + 1 < sizeof(token)) token[tlen++] = decoded;
+                    continue;
+                }
+                if (c == '(') {
+                    depth++;
+                    continue;
+                }
+                if (c == ')') {
+                    depth--;
+                    if (depth == 0) break;
+                    continue;
+                }
+                if (depth == 1 && tlen + 1 < sizeof(token)) token[tlen++] = (char)c;
+            }
+            if (tlen > 1) {
+                int useful = 0;
+                token[tlen] = 0;
+                for (size_t k = 0; k < tlen; ++k) {
+                    unsigned char tc = (unsigned char)token[k];
+                    if ((tc >= '0' && tc <= '9') || (tc >= 'A' && tc <= 'Z') || (tc >= 'a' && tc <= 'z') || tc >= 0x80) {
+                        useful = 1;
+                        break;
+                    }
+                }
+                if (useful) {
+                    char *utf8_chunk;
+                    token[tlen] = 0;
+                    utf8_chunk = ToUtf8BestEffort(token);
+                    if (utf8_chunk) {
+                        StripUnsupportedControlChars(utf8_chunk);
+                        if (HasVisibleText(utf8_chunk)) {
+                            if (!AppendTextWithCap(&buf, &len, &cap, utf8_chunk, strlen(utf8_chunk), 12000)) {
+                                free(utf8_chunk);
+                                break;
+                            }
+                            if (!AppendTextWithCap(&buf, &len, &cap, "\n", 1, 12000)) {
+                                free(utf8_chunk);
+                                break;
+                            }
+                        }
+                        free(utf8_chunk);
+                    }
+                }
+            }
+        }
+    }
+
+    free(bytes);
+    if (!buf || !buf[0]) {
+        free(buf);
+        return 0;
+    }
+    *out = buf;
+    return 1;
+}
+
 static void CollectRagTextFromPathW(const wchar_t *path, char **buf, size_t *len, size_t *cap, int depth) {
     DWORD attr;
-    if (!path || !path[0] || !buf || !len || !cap || depth > 3 || *len >= 12000) return;
+    if (!path || !path[0] || !buf || !len || !cap || depth > 3 || *len >= MAX_RAG_TEXT_CHARS) return;
     attr = GetFileAttributesW(path);
     if (attr == INVALID_FILE_ATTRIBUTES) return;
     if (attr & FILE_ATTRIBUTE_DIRECTORY) {
@@ -153,7 +593,12 @@ static void CollectRagTextFromPathW(const wchar_t *path, char **buf, size_t *len
         char *file_text = NULL;
         char path_utf8[1024];
         const char *base_name;
-        if (!ReadUtf8TextFileW(path, &file_text) || !file_text || !file_text[0]) {
+        if (IsPdfExtensionW(path)) {
+            if (!ReadPdfTextFileW(path, &file_text) || !file_text || !file_text[0]) {
+                free(file_text);
+                return;
+            }
+        } else if (!ReadUtf8TextFileW(path, &file_text) || !file_text || !file_text[0]) {
             free(file_text);
             return;
         }
@@ -161,13 +606,14 @@ static void CollectRagTextFromPathW(const wchar_t *path, char **buf, size_t *len
             free(file_text);
             return;
         }
+        NormalizeRagReferenceTextInPlace(file_text);
         base_name = strrchr(path_utf8, '\\');
         if (!base_name) base_name = path_utf8; else base_name++;
-        AppendTextWithCap(buf, len, cap, "\n[Source: ", 10, 12000);
-        AppendTextWithCap(buf, len, cap, base_name, strlen(base_name), 12000);
-        AppendTextWithCap(buf, len, cap, "]\n", 2, 12000);
-        AppendTextWithCap(buf, len, cap, file_text, strlen(file_text), 12000);
-        AppendTextWithCap(buf, len, cap, "\n", 1, 12000);
+        AppendRagTextWithCap(buf, len, cap, "\n[Source: ", 10, MAX_RAG_TEXT_CHARS, &g_rag_last_truncated);
+        AppendRagTextWithCap(buf, len, cap, base_name, strlen(base_name), MAX_RAG_TEXT_CHARS, &g_rag_last_truncated);
+        AppendRagTextWithCap(buf, len, cap, "]\n", 2, MAX_RAG_TEXT_CHARS, &g_rag_last_truncated);
+        AppendRagTextWithCap(buf, len, cap, file_text, strlen(file_text), MAX_RAG_TEXT_CHARS, &g_rag_last_truncated);
+        AppendRagTextWithCap(buf, len, cap, "\n", 1, MAX_RAG_TEXT_CHARS, &g_rag_last_truncated);
         free(file_text);
     }
 }
@@ -176,6 +622,7 @@ static char *LoadRagReferenceText(void) {
     wchar_t path_w[1024];
     char *buf = NULL;
     size_t len = 0, cap = 0;
+    g_rag_last_truncated = 0;
     if (!g_cfg.rag_enabled || !g_cfg.rag_source_path[0]) return NULL;
     if (!Utf8ToWide(g_cfg.rag_source_path, path_w, (int)(sizeof(path_w) / sizeof(path_w[0])))) return NULL;
     CollectRagTextFromPathW(path_w, &buf, &len, &cap, 0);
@@ -188,19 +635,103 @@ static char *LoadRagReferenceText(void) {
 
 static char *BuildRagUserMessage(const char *base_msg) {
     char *rag_text = LoadRagReferenceText();
-    char *out;
+    char *out = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    int ref_truncated = 0;
+    const char *question = base_msg ? base_msg : "";
+    const size_t max_total = 22000;
     if (!rag_text || !rag_text[0]) {
         free(rag_text);
         return _strdup(base_msg ? base_msg : "");
     }
-    out = DupPrintf("Please answer using the reference data when relevant.\n"
-                    "If the reference data directly contains the answer, prioritize it.\n"
-                    "If the reference data is insufficient, say the reference data is insufficient.\n"
-                    "\nReference data:\n%s\n\nQuestion:\n%s",
-                    rag_text,
-                    base_msg ? base_msg : "");
+
+    if (!AppendTextStrict(&out, &len, &cap,
+                          "Use the following reference data from TXT/MD files when relevant.\n"
+                          "Do not copy the reference verbatim unless explicitly requested.\n"
+                          "Answer in concise Traditional Chinese and focus on the user's question.\n\n",
+                          strlen("Use the following reference data from TXT/MD files when relevant.\n"
+                                 "Do not copy the reference verbatim unless explicitly requested.\n"
+                                 "Answer in concise Traditional Chinese and focus on the user's question.\n\n"),
+                          max_total) ||
+        !AppendTextStrict(&out, &len, &cap, "Question:\n", strlen("Question:\n"), max_total) ||
+        !AppendTextStrict(&out, &len, &cap, question, strlen(question), max_total) ||
+        !AppendTextStrict(&out, &len, &cap, "\n\nReference data:\n", strlen("\n\nReference data:\n"), max_total)) {
+        free(out);
+        free(rag_text);
+        return _strdup(question);
+    }
+
+    if (!AppendRagTextWithCap(&out, &len, &cap, rag_text, strlen(rag_text), max_total, &ref_truncated)) {
+        free(out);
+        free(rag_text);
+        return _strdup(question);
+    }
+
+    if ((g_rag_last_truncated || ref_truncated) &&
+        !AppendTextStrict(&out, &len, &cap,
+                          "\n\n[Note] Reference data was truncated to fit context window.",
+                          strlen("\n\n[Note] Reference data was truncated to fit context window."),
+                          max_total)) {
+        /* keep output usable even if note cannot be appended */
+    }
+
     free(rag_text);
     return out;
+}
+
+static int DecodeUtf8Codepoint(const unsigned char *s, unsigned int *cp, int *adv) {
+    if (!s || !*s) return 0;
+    if (s[0] < 0x80) {
+        *cp = s[0];
+        *adv = 1;
+        return 1;
+    }
+    if ((s[0] & 0xE0) == 0xC0 && (s[1] & 0xC0) == 0x80) {
+        *cp = ((s[0] & 0x1F) << 6) | (s[1] & 0x3F);
+        *adv = 2;
+        return 1;
+    }
+    if ((s[0] & 0xF0) == 0xE0 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
+        *cp = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+        *adv = 3;
+        return 1;
+    }
+    if ((s[0] & 0xF8) == 0xF0 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
+        *cp = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+        *adv = 4;
+        return 1;
+    }
+    *cp = s[0];
+    *adv = 1;
+    return 1;
+}
+
+static int IsEmojiCodepoint(unsigned int cp) {
+    return (cp >= 0x1F300 && cp <= 0x1FAFF) ||
+           (cp >= 0x2600 && cp <= 0x27BF) ||
+           (cp >= 0xFE00 && cp <= 0xFE0F) ||
+           (cp >= 0x1F1E6 && cp <= 0x1F1FF);
+}
+
+static void SanitizeAssistantOutput(char *text) {
+    unsigned char *src;
+    unsigned char *dst;
+    if (!text || !text[0]) return;
+    src = (unsigned char *)text;
+    dst = (unsigned char *)text;
+    while (*src) {
+        unsigned int cp = 0;
+        int adv = 1;
+        DecodeUtf8Codepoint(src, &cp, &adv);
+        if (cp == '|' || cp == 0xFF5C || IsEmojiCodepoint(cp)) {
+            src += adv;
+            continue;
+        }
+        for (int i = 0; i < adv && src[i]; ++i) *dst++ = src[i];
+        src += adv;
+    }
+    *dst = 0;
 }
 
 static int DetectPromptSlot(const char *system_prompt) {
@@ -390,6 +921,7 @@ static void NormalizePlainTextOutput(char *text) {
         src++;
     }
     *dst = 0;
+    SanitizeAssistantOutput(text);
 }
 
 static int IsUsableModelAnswer(const char *text) {
@@ -810,6 +1342,14 @@ static int ShouldRetryWithoutStream(const char *result) {
     return 0;
 }
 
+static const char *ResolveSystemPromptText(const char *system_prompt) {
+    if (system_prompt) {
+        if (strcmp(system_prompt, SYSTEM_PROMPT_NONE_TAG) == 0) return NULL;
+        return system_prompt[0] ? system_prompt : NULL;
+    }
+    return g_cfg.system_prompt[0] ? g_cfg.system_prompt : NULL;
+}
+
 static char *SendLLMRequestForTargetOnce(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing, int recv_timeout_ms) {
     ProviderRequestInfo provider;
     int use_stream;
@@ -838,15 +1378,19 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
     use_stream = provider.use_stream;
     char *user_msg = image_path && image_path[0] ? BuildImageUserMessage(user_text) : BuildUserMessage(user_text, region);
     if (!user_msg) return NULL;
+    const char *system_text = ResolveSystemPromptText(system_prompt);
     char system_all[1600];
-    snprintf(system_all, sizeof(system_all),
-             "%s\n\nOutput rule: Return final answer only. Do not output chain-of-thought, hidden reasoning, or <think> blocks.",
-             (system_prompt && system_prompt[0]) ? system_prompt : g_cfg.system_prompt);
-    char *sys_esc = JsonEscape(system_all);
+    char *sys_esc = NULL;
+    if (system_text && system_text[0]) {
+        snprintf(system_all, sizeof(system_all),
+                 "%s\n\nOutput rule: Return final answer only. Do not output chain-of-thought, hidden reasoning, or <think> blocks.",
+                 system_text);
+        sys_esc = JsonEscape(system_all);
+    }
     char *user_esc = JsonEscape(user_msg);
     char *img_b64 = NULL;
     free(user_msg);
-    if (!sys_esc || !user_esc) {
+    if ((system_text && system_text[0] && !sys_esc) || !user_esc) {
         free(sys_esc);
         free(user_esc);
         return NULL;
@@ -864,7 +1408,7 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
             free(user_esc);
             return DupPrintf("Failed to read screenshot: %s", image_path);
         }
-        body_cap = strlen(model) + strlen(sys_esc) + strlen(user_esc) + strlen(img_b64) + 512;
+        body_cap = strlen(model) + strlen(user_esc) + strlen(img_b64) + (sys_esc ? strlen(sys_esc) : 0) + 512;
         body = (char *)malloc(body_cap);
         if (!body) {
             free(sys_esc);
@@ -882,24 +1426,37 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
         }
         strcpy(img_url_esc, "data:image/png;base64,");
         strcat(img_url_esc, img_b64);
-        snprintf(body, body_cap,
-                 "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
-                 "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"},"
-                 "{\"type\":\"image_url\",\"image_url\":{\"url\":\"%s\"}}]}],\"temperature\":0.2,\"stream\":%s}",
-                 model, sys_esc, user_esc, img_url_esc, use_stream ? "true" : "false");
+        if (sys_esc) {
+            snprintf(body, body_cap,
+                     "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
+                     "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"},"
+                     "{\"type\":\"image_url\",\"image_url\":{\"url\":\"%s\"}}]}],\"temperature\":0.2,\"max_tokens\":1024,\"stream\":%s}",
+                     model, sys_esc, user_esc, img_url_esc, use_stream ? "true" : "false");
+        } else {
+            snprintf(body, body_cap,
+                     "{\"model\":\"%s\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"},"
+                     "{\"type\":\"image_url\",\"image_url\":{\"url\":\"%s\"}}]}],\"temperature\":0.2,\"max_tokens\":1024,\"stream\":%s}",
+                     model, user_esc, img_url_esc, use_stream ? "true" : "false");
+        }
         free(img_url_esc);
     } else {
-        size_t body_cap = strlen(model) + strlen(sys_esc) + strlen(user_esc) + 256;
+        size_t body_cap = strlen(model) + strlen(user_esc) + (sys_esc ? strlen(sys_esc) : 0) + 256;
         body = (char *)malloc(body_cap);
         if (!body) {
             free(sys_esc);
             free(user_esc);
             return NULL;
         }
-        snprintf(body, body_cap,
-                 "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
-                 "{\"role\":\"user\",\"content\":\"%s\"}],\"temperature\":0.2,\"stream\":%s}",
-                 model, sys_esc, user_esc, use_stream ? "true" : "false");
+        if (sys_esc) {
+            snprintf(body, body_cap,
+                     "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"%s\"},"
+                     "{\"role\":\"user\",\"content\":\"%s\"}],\"temperature\":0.2,\"max_tokens\":1024,\"stream\":%s}",
+                     model, sys_esc, user_esc, use_stream ? "true" : "false");
+        } else {
+            snprintf(body, body_cap,
+                     "{\"model\":\"%s\",\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}],\"temperature\":0.2,\"max_tokens\":1024,\"stream\":%s}",
+                     model, user_esc, use_stream ? "true" : "false");
+        }
     }
     if (provider.kind == PROVIDER_GOOGLE_GEMINI) {
         size_t body_cap;
@@ -919,18 +1476,33 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
             return NULL;
         }
         if (img_b64 && img_b64[0]) {
-            snprintf(body, body_cap,
-                     "{\"system_instruction\":{\"parts\":[{\"text\":\"%s\"}]},"
-                     "\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"%s\"},"
-                     "{\"inline_data\":{\"mime_type\":\"image/png\",\"data\":\"%s\"}}]}],"
-                     "\"generationConfig\":{\"temperature\":0.2}}",
-                     sys_esc, user_esc, img_b64);
+            if (sys_esc) {
+                snprintf(body, body_cap,
+                         "{\"system_instruction\":{\"parts\":[{\"text\":\"%s\"}]},"
+                         "\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"%s\"},"
+                         "{\"inline_data\":{\"mime_type\":\"image/png\",\"data\":\"%s\"}}]}],"
+                         "\"generationConfig\":{\"temperature\":0.2,\"maxOutputTokens\":1024}}",
+                         sys_esc, user_esc, img_b64);
+            } else {
+                snprintf(body, body_cap,
+                         "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"%s\"},"
+                         "{\"inline_data\":{\"mime_type\":\"image/png\",\"data\":\"%s\"}}]}],"
+                         "\"generationConfig\":{\"temperature\":0.2,\"maxOutputTokens\":1024}}",
+                         user_esc, img_b64);
+            }
         } else {
-            snprintf(body, body_cap,
-                     "{\"system_instruction\":{\"parts\":[{\"text\":\"%s\"}]},"
-                     "\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"%s\"}]}],"
-                     "\"generationConfig\":{\"temperature\":0.2}}",
-                     sys_esc, user_esc);
+            if (sys_esc) {
+                snprintf(body, body_cap,
+                         "{\"system_instruction\":{\"parts\":[{\"text\":\"%s\"}]},"
+                         "\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"%s\"}]}],"
+                         "\"generationConfig\":{\"temperature\":0.2,\"maxOutputTokens\":1024}}",
+                         sys_esc, user_esc);
+            } else {
+                snprintf(body, body_cap,
+                         "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"%s\"}]}],"
+                         "\"generationConfig\":{\"temperature\":0.2,\"maxOutputTokens\":1024}}",
+                         user_esc);
+            }
         }
     }
     free(sys_esc);
@@ -1233,7 +1805,7 @@ static void StartRequestExTarget(const char *text, const char *region, const cha
     req->from_ask = from_ask;
     req->req_id = (int)InterlockedIncrement(&g_request_seq);
     req->start_ms = GetTickCount64();
-    strncpy(req->system_prompt, (system_prompt && system_prompt[0]) ? system_prompt : g_cfg.system_prompt, sizeof(req->system_prompt) - 1);
+    strncpy(req->system_prompt, system_prompt ? system_prompt : g_cfg.system_prompt, sizeof(req->system_prompt) - 1);
     req->system_prompt[sizeof(req->system_prompt) - 1] = 0;
     req->use_target_override = target ? 1 : 0;
     if (target) req->target = *target;
