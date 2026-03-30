@@ -10,7 +10,7 @@ $source = "main.cpp"
 $exe = $Output
 $libs = @(
   "winhttp.lib", "user32.lib", "gdi32.lib", "advapi32.lib", "comdlg32.lib",
-  "shell32.lib", "ole32.lib", "gdiplus.lib", "crypt32.lib"
+  "shell32.lib", "ole32.lib", "gdiplus.lib"
 )
 
 function Get-MsvcFlags($profile) {
@@ -109,7 +109,7 @@ foreach ($vcvars in $fallbacks) {
 
 $gxx = Find-Tool "g++.exe"
 if ($gxx) {
-  & $gxx -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -lcrypt32
+  & $gxx -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus
   if ($LASTEXITCODE -eq 0) { Show-BinarySize }
   exit 0
 }

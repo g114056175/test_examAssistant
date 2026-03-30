@@ -2,7 +2,6 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <winhttp.h>
-#include <wincrypt.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -23,7 +22,6 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "gdiplus.lib")
-#pragma comment(lib, "crypt32.lib")
 
 #define APP_NAME "Helper"
 #define CONFIG_FILE "config.ini"

@@ -172,7 +172,7 @@ static void DecodeIniUtf8Value(char *s) {
     char *src = s;
     char *dst = s;
     while (src && *src) {
-        if (src[0] == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
+        if (src[0] == '%' && HexNibble((unsigned char)src[1]) >= 0 && HexNibble((unsigned char)src[2]) >= 0) {
             int hi = HexNibble((unsigned char)src[1]);
             int lo = HexNibble((unsigned char)src[2]);
             *dst++ = (char)((hi << 4) | lo);

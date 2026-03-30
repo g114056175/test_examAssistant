@@ -1,9 +1,45 @@
+static char *EncodeBase64NoCrlf(const BYTE *bytes, size_t size) {
+    static const char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t out_len;
+    char *out;
+    size_t i, j;
+    if (!bytes || size == 0) return NULL;
+    out_len = ((size + 2) / 3) * 4;
+    out = (char *)malloc(out_len + 1);
+    if (!out) return NULL;
+    i = 0;
+    j = 0;
+    while (i + 2 < size) {
+        unsigned int n = ((unsigned int)bytes[i] << 16) | ((unsigned int)bytes[i + 1] << 8) | (unsigned int)bytes[i + 2];
+        out[j++] = kB64[(n >> 18) & 0x3F];
+        out[j++] = kB64[(n >> 12) & 0x3F];
+        out[j++] = kB64[(n >> 6) & 0x3F];
+        out[j++] = kB64[n & 0x3F];
+        i += 3;
+    }
+    if (i < size) {
+        unsigned int n = (unsigned int)bytes[i] << 16;
+        out[j++] = kB64[(n >> 18) & 0x3F];
+        if (i + 1 < size) {
+            n |= (unsigned int)bytes[i + 1] << 8;
+            out[j++] = kB64[(n >> 12) & 0x3F];
+            out[j++] = kB64[(n >> 6) & 0x3F];
+            out[j++] = '=';
+        } else {
+            out[j++] = kB64[(n >> 12) & 0x3F];
+            out[j++] = '=';
+            out[j++] = '=';
+        }
+    }
+    out[j] = 0;
+    return out;
+}
+
 static char *ReadFileBase64(const char *path) {
     HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     DWORD size = 0;
     DWORD read = 0;
     BYTE *bytes = NULL;
-    DWORD out_len = 0;
     char *out = NULL;
     if (file == INVALID_HANDLE_VALUE) return NULL;
     size = GetFileSize(file, NULL);
@@ -22,21 +58,7 @@ static char *ReadFileBase64(const char *path) {
         return NULL;
     }
     CloseHandle(file);
-    if (!CryptBinaryToStringA(bytes, size, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &out_len)) {
-        free(bytes);
-        return NULL;
-    }
-    out = (char *)malloc(out_len + 1);
-    if (!out) {
-        free(bytes);
-        return NULL;
-    }
-    if (!CryptBinaryToStringA(bytes, size, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, out, &out_len)) {
-        free(bytes);
-        free(out);
-        return NULL;
-    }
-    out[out_len] = 0;
+    out = EncodeBase64NoCrlf(bytes, (size_t)size);
     free(bytes);
     return out;
 }
@@ -100,7 +122,6 @@ static char *ReadFileBase64W(const wchar_t *path) {
     LARGE_INTEGER size_li;
     DWORD read = 0;
     BYTE *bytes = NULL;
-    DWORD out_len = 0;
     char *out = NULL;
     if (file == INVALID_HANDLE_VALUE) return NULL;
     if (!GetFileSizeEx(file, &size_li) || size_li.QuadPart <= 0 || size_li.QuadPart > 20 * 1024 * 1024) {
@@ -118,21 +139,7 @@ static char *ReadFileBase64W(const wchar_t *path) {
         return NULL;
     }
     CloseHandle(file);
-    if (!CryptBinaryToStringA(bytes, read, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &out_len)) {
-        free(bytes);
-        return NULL;
-    }
-    out = (char *)malloc(out_len + 1);
-    if (!out) {
-        free(bytes);
-        return NULL;
-    }
-    if (!CryptBinaryToStringA(bytes, read, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, out, &out_len)) {
-        free(bytes);
-        free(out);
-        return NULL;
-    }
-    out[out_len] = 0;
+    out = EncodeBase64NoCrlf(bytes, (size_t)read);
     free(bytes);
     return out;
 }
@@ -202,6 +209,18 @@ static int LoadRagAttachFilesW(wchar_t out_paths[][MAX_PATH], int *out_count) {
     CollectRagAttachFilesW(path_w, out_paths, &count, 0);
     *out_count = count;
     return count > 0;
+}
+
+static void WideCopyAppend(wchar_t *dst, size_t dst_count, const wchar_t *src) {
+    size_t i = 0;
+    size_t j;
+    if (!dst || dst_count == 0 || !src) return;
+    while (i + 1 < dst_count && dst[i]) i++;
+    j = 0;
+    while (i + 1 < dst_count && src[j]) {
+        dst[i++] = src[j++];
+    }
+    dst[i] = 0;
 }
 
 static int HasSupportedRagExtensionW(const wchar_t *name) {
@@ -1551,8 +1570,8 @@ static char *SendLLMRequestForTargetOnce(const char *user_text, const char *regi
     extra_w[url.dwExtraInfoLength] = 0;
     WCHAR full_path_w[1536];
     full_path_w[0] = 0;
-    wcsncat(full_path_w, path_w, (sizeof(full_path_w) / sizeof(WCHAR)) - 1);
-    if (extra_w[0]) wcsncat(full_path_w, extra_w, (sizeof(full_path_w) / sizeof(WCHAR)) - wcslen(full_path_w) - 1);
+    WideCopyAppend(full_path_w, sizeof(full_path_w) / sizeof(WCHAR), path_w);
+    if (extra_w[0]) WideCopyAppend(full_path_w, sizeof(full_path_w) / sizeof(WCHAR), extra_w);
     HINTERNET hSession = WinHttpOpen(L"LLMOverlay/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
         free(img_b64);

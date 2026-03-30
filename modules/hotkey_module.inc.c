@@ -68,27 +68,39 @@ static int ParseKeyName(const char *key, UINT *vk) {
 
 static int ParseHotkey(const char *text, UINT *mod, UINT *vk) {
     char buf[128];
-    char *token;
+    char *p;
     *mod = 0;
     *vk = 0;
     strncpy(buf, text, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = 0;
-    token = strtok(buf, "+");
-    while (token) {
-        while (*token == ' ') token++;
-        NormalizeKeyToken(token);
-        if (strcmp(token, "CTRL") == 0 || strcmp(token, "CONTROL") == 0) {
+    p = buf;
+    while (*p) {
+        char token[64];
+        char *tok;
+        int ti = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != '+') {
+            if (ti + 1 < (int)sizeof(token)) token[ti++] = *p;
+            p++;
+        }
+        while (ti > 0 && token[ti - 1] == ' ') ti--;
+        token[ti] = 0;
+        tok = token;
+        if (tok[0] == 0) return 0;
+        while (*tok == ' ') tok++;
+        NormalizeKeyToken(tok);
+        if (strcmp(tok, "CTRL") == 0 || strcmp(tok, "CONTROL") == 0) {
             *mod |= MOD_CONTROL;
-        } else if (strcmp(token, "ALT") == 0) {
+        } else if (strcmp(tok, "ALT") == 0) {
             *mod |= MOD_ALT;
-        } else if (strcmp(token, "SHIFT") == 0) {
+        } else if (strcmp(tok, "SHIFT") == 0) {
             *mod |= MOD_SHIFT;
-        } else if (strcmp(token, "WIN") == 0 || strcmp(token, "WINDOWS") == 0) {
+        } else if (strcmp(tok, "WIN") == 0 || strcmp(tok, "WINDOWS") == 0) {
             *mod |= MOD_WIN;
-        } else if (!ParseKeyName(token, vk)) {
+        } else if (!ParseKeyName(tok, vk)) {
             return 0;
         }
-        token = strtok(NULL, "+");
+        if (*p == '+') p++;
     }
     return *vk != 0;
 }
