@@ -1,13 +1,23 @@
+static void CopyJoinedText(char *dst, size_t dst_size, const char *prefix, const char *suffix) {
+    if (!dst || dst_size == 0) return;
+    if (!prefix) prefix = "";
+    if (!suffix) suffix = "";
+    snprintf(dst, dst_size, "%s%s", prefix, suffix);
+}
+
 static void ConfigDefaults(AppConfig *cfg) {
+    static const char *kTwPrefix = "Reply in Traditional Chinese. ";
+    static const char *kTwPlainPrefix = "Reply in Traditional Chinese. Plain text only. ";
     memset(cfg, 0, sizeof(*cfg));
     strcpy(cfg->endpoint, "");
     strcpy(cfg->api_key, "");
     strcpy(cfg->model, "");
-    strcpy(cfg->system_prompt, "Reply in Traditional Chinese. You are a strict exam-answering assistant. Determine question type first. If multiple-choice, output one answer per question with numbering, each on a new line, for example: 1. (A) 2. (B)(D). If non-multiple-choice, output concise direct answers with numbering, one line per question. The number of output lines must equal the number of questions; never omit any question. If information is insufficient or ambiguous, output 'insufficient information' for that item. Do not guess. Output final answers only.");
-    strcpy(cfg->prompt_2, "Reply in Traditional Chinese. Plain text only. Give the answer first, then add a short and simple explanation.");
-    strcpy(cfg->prompt_3, "Reply in Traditional Chinese. Plain text only. Give the answer first, then provide a detailed explanation with key reasoning and conclusion.");
-    strcpy(cfg->prompt_4, "Reply in Traditional Chinese. Plain text only. Answer directly and keep it short.");
-    strcpy(cfg->prompt_5, "Reply in Traditional Chinese. Plain text only. Answer first, then list concise key points.");
+    CopyJoinedText(cfg->system_prompt, sizeof(cfg->system_prompt), kTwPrefix,
+                   "You are a strict exam-answering assistant. Determine question type first. If multiple-choice, output one answer per question with numbering, each on a new line, for example: 1. (A) 2. (B)(D). If non-multiple-choice, output concise direct answers with numbering, one line per question. The number of output lines must equal the number of questions; never omit any question. If information is insufficient or ambiguous, output 'insufficient information' for that item. Do not guess. Output final answers only.");
+    CopyJoinedText(cfg->prompt_2, sizeof(cfg->prompt_2), kTwPlainPrefix, "Give the answer first, then add a short and simple explanation.");
+    CopyJoinedText(cfg->prompt_3, sizeof(cfg->prompt_3), kTwPlainPrefix, "Give the answer first, then provide a detailed explanation with key reasoning and conclusion.");
+    CopyJoinedText(cfg->prompt_4, sizeof(cfg->prompt_4), kTwPlainPrefix, "Answer directly and keep it short.");
+    CopyJoinedText(cfg->prompt_5, sizeof(cfg->prompt_5), kTwPlainPrefix, "Answer first, then list concise key points.");
     strcpy(cfg->user_template, "{{text}}");
     for (int i = 0; i < MAX_PROMPT_ROUTES; ++i) {
         cfg->route_prompt_endpoint[i][0] = 0;
@@ -37,12 +47,12 @@ static void ConfigDefaults(AppConfig *cfg) {
     strcpy(cfg->ensemble_primary_api_key, "");
     strcpy(cfg->ensemble_primary_model, "");
     cfg->ensemble_reviewer_count = 0;
-    strcpy(cfg->ensemble_side_prompt[0], "Reply in Traditional Chinese. Give direct answers only. No explanation.");
-    strcpy(cfg->ensemble_side_prompt[1], "Reply in Traditional Chinese. Answer briefly with direct answers first, minimal explanation.");
-    strcpy(cfg->ensemble_side_prompt[2], "Reply in Traditional Chinese. Solve carefully and provide the likely answer with short supporting reasoning.");
-    strcpy(cfg->ensemble_main_prompt[0], "Reply in Traditional Chinese. Based on the other model answers, give the final answer only. Mark disagreement only if present.");
-    strcpy(cfg->ensemble_main_prompt[1], "Reply in Traditional Chinese. Based on the other model answers, summarize the best final answer and briefly mention disagreement if present.");
-    strcpy(cfg->ensemble_main_prompt[2], "Reply in Traditional Chinese. Based on the other model answers, provide the final answer, explain the main reason briefly, and clearly mark disagreement if present.");
+    CopyJoinedText(cfg->ensemble_side_prompt[0], sizeof(cfg->ensemble_side_prompt[0]), kTwPrefix, "Give direct answers only. No explanation.");
+    CopyJoinedText(cfg->ensemble_side_prompt[1], sizeof(cfg->ensemble_side_prompt[1]), kTwPrefix, "Answer briefly with direct answers first, minimal explanation.");
+    CopyJoinedText(cfg->ensemble_side_prompt[2], sizeof(cfg->ensemble_side_prompt[2]), kTwPrefix, "Solve carefully and provide the likely answer with short supporting reasoning.");
+    CopyJoinedText(cfg->ensemble_main_prompt[0], sizeof(cfg->ensemble_main_prompt[0]), kTwPrefix, "Based on the other model answers, give the final answer only. Mark disagreement only if present.");
+    CopyJoinedText(cfg->ensemble_main_prompt[1], sizeof(cfg->ensemble_main_prompt[1]), kTwPrefix, "Based on the other model answers, summarize the best final answer and briefly mention disagreement if present.");
+    CopyJoinedText(cfg->ensemble_main_prompt[2], sizeof(cfg->ensemble_main_prompt[2]), kTwPrefix, "Based on the other model answers, provide the final answer, explain the main reason briefly, and clearly mark disagreement if present.");
     cfg->overlay_enabled = 1;
     cfg->overlay_visible = 1;
     cfg->opacity = 180;
@@ -151,16 +161,21 @@ static void EncodeIniUtf8Value(const char *src, char *dst, int dst_size) {
     dst[o] = 0;
 }
 
+static int HexNibble(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
 static void DecodeIniUtf8Value(char *s) {
     char *src = s;
     char *dst = s;
     while (src && *src) {
         if (src[0] == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
-            char hexbuf[3];
-            hexbuf[0] = src[1];
-            hexbuf[1] = src[2];
-            hexbuf[2] = 0;
-            *dst++ = (char)strtol(hexbuf, NULL, 16);
+            int hi = HexNibble((unsigned char)src[1]);
+            int lo = HexNibble((unsigned char)src[2]);
+            *dst++ = (char)((hi << 4) | lo);
             src += 3;
         } else {
             *dst++ = *src++;
@@ -483,15 +498,15 @@ static void SaveBasicConfig(const AppConfig *cfg) {
     WritePrivateProfileStringA("Routes", "image_endpoint", NULL, g_config_path);
     WritePrivateProfileStringA("Routes", "image_api_key", NULL, g_config_path);
     WritePrivateProfileStringA("Routes", "image_model", NULL, g_config_path);
-    sprintf(tmp, "%d", cfg->overlay_enabled);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->overlay_enabled);
     WritePrivateProfileStringA("UI", "overlay_enabled", tmp, g_config_path);
-    sprintf(tmp, "%d", cfg->overlay_visible);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->overlay_visible);
     WritePrivateProfileStringA("UI", "overlay_visible", tmp, g_config_path);
-    sprintf(tmp, "%d", cfg->opacity);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->opacity);
     WritePrivateProfileStringA("UI", "opacity", tmp, g_config_path);
-    sprintf(tmp, "%d", cfg->theme_light);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->theme_light);
     WritePrivateProfileStringA("UI", "theme_light", tmp, g_config_path);
-    sprintf(tmp, "%d", cfg->stream);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->stream);
     WritePrivateProfileStringA("UI", "stream", tmp, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "send_prompt_1", cfg->hk_send, g_config_path);
     WritePrivateProfileStringA("Hotkeys", "send_prompt_2", NULL, g_config_path);
@@ -521,11 +536,11 @@ static void SaveAdvancedConfig(const AppConfig *cfg) {
     char key_esc[512];
     char model_esc[256];
     char prompt_esc[2048];
-    sprintf(tmp, "%d", cfg->rag_enabled);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->rag_enabled);
     WritePrivateProfileStringA("RAG", "enabled", tmp, g_config_path);
     EncodeIniUtf8Value(cfg->rag_source_path, rag_path_esc, sizeof(rag_path_esc));
     WritePrivateProfileStringA("RAG", "source_path", rag_path_esc, g_config_path);
-    sprintf(tmp, "%d", cfg->ensemble_enabled);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->ensemble_enabled);
     WritePrivateProfileStringA("Ensemble", "enabled", tmp, g_config_path);
     EscapeIniValue(cfg->ensemble_primary_endpoint, ep_esc, sizeof(ep_esc));
     EscapeIniValue(cfg->ensemble_primary_api_key, key_esc, sizeof(key_esc));
@@ -533,7 +548,7 @@ static void SaveAdvancedConfig(const AppConfig *cfg) {
     WritePrivateProfileStringA("Ensemble", "primary_endpoint", ep_esc, g_config_path);
     WritePrivateProfileStringA("Ensemble", "primary_api_key", key_esc, g_config_path);
     WritePrivateProfileStringA("Ensemble", "primary_model", model_esc, g_config_path);
-    sprintf(tmp, "%d", cfg->ensemble_reviewer_count);
+    snprintf(tmp, sizeof(tmp), "%d", cfg->ensemble_reviewer_count);
     WritePrivateProfileStringA("Ensemble", "reviewer_count", tmp, g_config_path);
     for (int i = 0; i < 3; ++i) {
         char name[64];

@@ -4,6 +4,20 @@ static void NormalizeKeyToken(char *token) {
     }
 }
 
+static int ParsePositiveIntAscii(const char *s) {
+    int v = 0;
+    int has_digit = 0;
+    if (!s) return -1;
+    while (*s) {
+        if (*s < '0' || *s > '9') return -1;
+        has_digit = 1;
+        v = v * 10 + (*s - '0');
+        if (v > 1000000) return -1;
+        ++s;
+    }
+    return has_digit ? v : -1;
+}
+
 static int ParseKeyName(const char *key, UINT *vk) {
     if (strlen(key) == 1) {
         char c = key[0];
@@ -35,7 +49,7 @@ static int ParseKeyName(const char *key, UINT *vk) {
     if (strcmp(key, "NUMDOT") == 0) { *vk = VK_DECIMAL; return 1; }
 
     if (strncmp(key, "VK_", 3) == 0) {
-        int code = atoi(key + 3);
+        int code = ParsePositiveIntAscii(key + 3);
         if (code > 0 && code <= 255) {
             *vk = (UINT)code;
             return 1;
@@ -43,7 +57,7 @@ static int ParseKeyName(const char *key, UINT *vk) {
     }
 
     if (key[0] == 'F' && key[1] >= '1') {
-        int n = atoi(key + 1);
+        int n = ParsePositiveIntAscii(key + 1);
         if (n >= 1 && n <= 24) {
             *vk = VK_F1 + (n - 1);
             return 1;

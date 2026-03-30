@@ -8,6 +8,18 @@ Lightweight Win32 desktop helper for quick LLM queries from selected text or a s
 .\build.ps1
 ```
 
+Build profiles:
+
+- Portable (default, static CRT):
+	- `./build.ps1 -Profile portable`
+- Portable Compact (static CRT, smaller exe):
+	- `./build.ps1 -Profile portable_compact`
+	- Uses `/DYNAMICBASE:NO` to reduce size (disables ASLR hardening).
+- Small (dynamic CRT dependency):
+	- `./build.ps1 -Profile small`
+- Smallest (dynamic CRT dependency, reduced hardening):
+	- `./build.ps1 -Profile smallest`
+
 ## Run
 
 ```powershell

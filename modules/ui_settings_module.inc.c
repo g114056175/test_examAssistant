@@ -2,6 +2,9 @@ static int g_route_kind = 0;
 static int g_route_index = -1;
 static char g_quick_prompt_text[2048] = "";
 static const char *k_default_quick_prompt = "Test LLM prompt: please reply alive.";
+static const char *k_rag_validation_message =
+    "Reference data only supports .txt/.md file or folder path.\nPlease convert PDF/PPT to TXT/MD first, then retry.";
+static const char *k_rag_validation_title = "Reference Data Validation";
 
 static void SetDlgItemTextUtf8(HWND hwnd, int id, const char *utf8) {
     HWND ctrl = GetDlgItem(hwnd, id);
@@ -1005,10 +1008,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             SaveModelRouteEditor(hwnd);
             PruneBlankModelRoutes(&g_cfg);
             if (g_cfg.rag_enabled && !IsSupportedRagPathUtf8(g_cfg.rag_source_path)) {
-                MessageBoxA(hwnd,
-                            "Reference data only supports .txt/.md file or folder path.\nPlease convert PDF/PPT to TXT/MD first, then retry.",
-                            "Reference Data Validation",
-                            MB_OK | MB_ICONWARNING);
+                MessageBoxA(hwnd, k_rag_validation_message, k_rag_validation_title, MB_OK | MB_ICONWARNING);
                 return 0;
             }
             if (!ValidateHotkeyControls(hwnd, 0, NULL, hk_err, sizeof(hk_err))) { MessageBoxA(hwnd, hk_err, "Hotkey Validation", MB_OK | MB_ICONWARNING); return 0; }
@@ -1032,10 +1032,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             if (g_req_inflight) return 0;
             ApplyRuntimeConfigFromControls(hwnd);
             if (g_cfg.rag_enabled && !IsSupportedRagPathUtf8(g_cfg.rag_source_path)) {
-                MessageBoxA(hwnd,
-                            "Reference data only supports .txt/.md file or folder path.\nPlease convert PDF/PPT to TXT/MD first, then retry.",
-                            "Reference Data Validation",
-                            MB_OK | MB_ICONWARNING);
+                MessageBoxA(hwnd, k_rag_validation_message, k_rag_validation_title, MB_OK | MB_ICONWARNING);
                 return 0;
             }
             GetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, prompt, sizeof(prompt));

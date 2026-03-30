@@ -33,6 +33,239 @@
 #define MAX_MODEL_ROUTES 16
 #define SYSTEM_PROMPT_NONE_TAG "__NO_SYSTEM_PROMPT__"
 
+static const char *k_msg_no_selected_text = "No selected text captured. Please re-select text and try again.";
+
+static int TinyVsnprintf(char *dst, size_t dst_size, const char *fmt, va_list ap) {
+    size_t out = 0;
+    int total = 0;
+    if (!fmt) {
+        if (dst && dst_size) dst[0] = 0;
+        return 0;
+    }
+    for (const char *p = fmt; *p; ++p) {
+        if (*p != '%') {
+            if (dst && out + 1 < dst_size) dst[out] = *p;
+            out++;
+            total++;
+            continue;
+        }
+        p++;
+        if (!*p) break;
+        if (*p == '%') {
+            if (dst && out + 1 < dst_size) dst[out] = '%';
+            out++;
+            total++;
+            continue;
+        }
+        int precision = -1;
+        if (*p == '.') {
+            precision = 0;
+            p++;
+            while (*p >= '0' && *p <= '9') {
+                precision = precision * 10 + (*p - '0');
+                p++;
+            }
+        }
+        int is_long = 0;
+        if (*p == 'l') {
+            is_long = 1;
+            p++;
+        }
+        if (!*p) break;
+        if (*p == 's') {
+            const char *s = va_arg(ap, const char *);
+            int n = 0;
+            if (!s) s = "";
+            while (s[n] && (precision < 0 || n < precision)) {
+                if (dst && out + 1 < dst_size) dst[out] = s[n];
+                out++;
+                total++;
+                n++;
+            }
+            continue;
+        }
+        if (*p == 'c') {
+            int c = va_arg(ap, int);
+            if (dst && out + 1 < dst_size) dst[out] = (char)c;
+            out++;
+            total++;
+            continue;
+        }
+        if (*p == 'u' || *p == 'd' || *p == 'i') {
+            unsigned long long u = 0;
+            int neg = 0;
+            if (*p == 'u') {
+                u = is_long ? (unsigned long long)va_arg(ap, unsigned long) : (unsigned long long)va_arg(ap, unsigned int);
+            } else {
+                long long v = is_long ? (long long)va_arg(ap, long) : (long long)va_arg(ap, int);
+                if (v < 0) {
+                    neg = 1;
+                    u = (unsigned long long)(-v);
+                } else {
+                    u = (unsigned long long)v;
+                }
+            }
+            char tmp[32];
+            int t = 0;
+            do {
+                tmp[t++] = (char)('0' + (u % 10));
+                u /= 10;
+            } while (u && t < (int)sizeof(tmp));
+            if (neg) {
+                if (dst && out + 1 < dst_size) dst[out] = '-';
+                out++;
+                total++;
+            }
+            while (t-- > 0) {
+                if (dst && out + 1 < dst_size) dst[out] = tmp[t];
+                out++;
+                total++;
+            }
+            continue;
+        }
+        if (dst && out + 1 < dst_size) dst[out] = '%';
+        out++;
+        total++;
+        if (dst && out + 1 < dst_size) dst[out] = *p;
+        out++;
+        total++;
+    }
+    if (dst && dst_size) {
+        size_t term = (out < dst_size) ? out : (dst_size - 1);
+        dst[term] = 0;
+    }
+    return total;
+}
+
+static int TinySnprintf(char *dst, size_t dst_size, const char *fmt, ...) {
+    va_list ap;
+    int n;
+    va_start(ap, fmt);
+    n = TinyVsnprintf(dst, dst_size, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+static int TinySwprintf(wchar_t *dst, size_t dst_count, const wchar_t *fmt, ...) {
+    size_t out = 0;
+    int total = 0;
+    va_list ap;
+    va_start(ap, fmt);
+    for (const wchar_t *p = fmt; p && *p; ++p) {
+        if (*p != L'%') {
+            if (dst && out + 1 < dst_count) dst[out] = *p;
+            out++;
+            total++;
+            continue;
+        }
+        p++;
+        if (!*p) break;
+        if (*p == L'%') {
+            if (dst && out + 1 < dst_count) dst[out] = L'%';
+            out++;
+            total++;
+            continue;
+        }
+        if (*p == L'l' && p[1] == L's') {
+            const wchar_t *s = va_arg(ap, const wchar_t *);
+            int n = 0;
+            if (!s) s = L"";
+            p++;
+            while (s[n]) {
+                if (dst && out + 1 < dst_count) dst[out] = s[n];
+                out++;
+                total++;
+                n++;
+            }
+            continue;
+        }
+        if (*p == L'd' || *p == L'i' || *p == L'u') {
+            unsigned long long u = 0;
+            int neg = 0;
+            if (*p == L'u') {
+                u = (unsigned long long)va_arg(ap, unsigned int);
+            } else {
+                long long v = (long long)va_arg(ap, int);
+                if (v < 0) {
+                    neg = 1;
+                    u = (unsigned long long)(-v);
+                } else {
+                    u = (unsigned long long)v;
+                }
+            }
+            wchar_t tmp[32];
+            int t = 0;
+            do {
+                tmp[t++] = (wchar_t)(L'0' + (u % 10));
+                u /= 10;
+            } while (u && t < (int)(sizeof(tmp) / sizeof(tmp[0])));
+            if (neg) {
+                if (dst && out + 1 < dst_count) dst[out] = L'-';
+                out++;
+                total++;
+            }
+            while (t-- > 0) {
+                if (dst && out + 1 < dst_count) dst[out] = tmp[t];
+                out++;
+                total++;
+            }
+            continue;
+        }
+        if (dst && out + 1 < dst_count) dst[out] = L'%';
+        out++;
+        total++;
+        if (dst && out + 1 < dst_count) dst[out] = *p;
+        out++;
+        total++;
+    }
+    if (dst && dst_count) {
+        size_t term = (out < dst_count) ? out : (dst_count - 1);
+        dst[term] = 0;
+    }
+    va_end(ap);
+    return total;
+}
+
+static int TinyToLowerA(int c) {
+    return (c >= 'A' && c <= 'Z') ? (c + ('a' - 'A')) : c;
+}
+
+static wchar_t TinyToLowerW(wchar_t c) {
+    return (c >= L'A' && c <= L'Z') ? (wchar_t)(c + (L'a' - L'A')) : c;
+}
+
+static int TinyStrnicmp(const char *a, const char *b, size_t n) {
+    size_t i;
+    if (!a) a = "";
+    if (!b) b = "";
+    for (i = 0; i < n; ++i) {
+        int ca = TinyToLowerA((unsigned char)a[i]);
+        int cb = TinyToLowerA((unsigned char)b[i]);
+        if (ca != cb) return ca - cb;
+        if (a[i] == 0) return 0;
+    }
+    return 0;
+}
+
+static int TinyWcsicmp(const wchar_t *a, const wchar_t *b) {
+    size_t i = 0;
+    if (!a) a = L"";
+    if (!b) b = L"";
+    for (;;) {
+        wchar_t ca = TinyToLowerW(a[i]);
+        wchar_t cb = TinyToLowerW(b[i]);
+        if (ca != cb) return (int)ca - (int)cb;
+        if (a[i] == 0) return 0;
+        ++i;
+    }
+}
+
+#define snprintf TinySnprintf
+#define vsnprintf TinyVsnprintf
+#define swprintf TinySwprintf
+#define _strnicmp TinyStrnicmp
+#define _wcsicmp TinyWcsicmp
+
 #define HOTKEY_SEND_SELECTED  1
 #define HOTKEY_SEND_PROMPT2   4
 #define HOTKEY_SET_TL         2
@@ -453,7 +686,7 @@ static void TriggerModelRouteAt(int route_index, POINT cursor) {
     } else {
         g_wait_prefix[0] = 0;
             if (!HasVisibleText(g_overlay_text)) {
-                ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+                ShowOverlayText(k_msg_no_selected_text, cursor);
             }
     }
     free(text);
@@ -509,7 +742,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             } else {
                 g_wait_prefix[0] = 0;
                     if (!HasVisibleText(g_overlay_text)) {
-                        ShowOverlayText("No selected text captured. Please re-select text and try again.", cursor);
+                        ShowOverlayText(k_msg_no_selected_text, cursor);
                     }
             }
             free(text);

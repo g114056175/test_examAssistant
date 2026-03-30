@@ -1,9 +1,65 @@
+param(
+  [ValidateSet("portable", "portable_compact", "small", "smallest")]
+  [string]$Profile = "portable",
+  [string]$Output = "llm_overlay.exe"
+)
+
 $ErrorActionPreference = "Stop"
 
 $source = "main.cpp"
-$exe = "llm_overlay.exe"
+$exe = $Output
+$libs = @(
+  "winhttp.lib", "user32.lib", "gdi32.lib", "advapi32.lib", "comdlg32.lib",
+  "shell32.lib", "ole32.lib", "gdiplus.lib", "crypt32.lib"
+)
+
+function Get-MsvcFlags($profile) {
+  $common = @(
+    "/nologo", "/O1", "/Os", "/GL", "/Gy", "/Gw", "/GF",
+    "/DNOMINMAX", "/DUNICODE", "/D_UNICODE", "/DWINVER=0x0601", "/D_WIN32_WINNT=0x0601"
+  )
+  $linkCommon = @("/LTCG", "/OPT:REF", "/OPT:ICF")
+
+  switch ($profile) {
+    "portable" {
+      return @{
+        Cl = $common + @("/MT")
+        Link = $linkCommon
+      }
+    }
+    "portable_compact" {
+      return @{
+        Cl = $common + @("/MT")
+        Link = $linkCommon + @("/DYNAMICBASE:NO")
+      }
+    }
+    "small" {
+      return @{
+        Cl = $common + @("/MD")
+        Link = $linkCommon
+      }
+    }
+    "smallest" {
+      return @{
+        Cl = $common + @("/MD", "/GS-", "/guard:cf-")
+        Link = $linkCommon + @("/DYNAMICBASE:NO")
+      }
+    }
+  }
+}
+
+function Show-BinarySize {
+  if (Test-Path $exe) {
+    $f = Get-Item $exe
+    $kb = [Math]::Round($f.Length / 1KB, 2)
+    Write-Host "Built $($f.Name): $($f.Length) bytes ($kb KB) [profile=$Profile]"
+  }
+}
+
 function Compile-Msvc($clPath) {
-  & $clPath /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib comdlg32.lib shell32.lib ole32.lib gdiplus.lib crypt32.lib
+  $flags = Get-MsvcFlags $Profile
+  & $clPath @($flags.Cl) $source "/Fe:$exe" /link @($flags.Link) @($libs)
+  if ($LASTEXITCODE -eq 0) { Show-BinarySize }
 }
 
 function Find-Tool($name) {
@@ -24,9 +80,11 @@ if (Test-Path $vswhere) {
   if ($installPath) {
     $vcvars = Join-Path $installPath "VC\Auxiliary\Build\vcvars64.bat"
     if (Test-Path $vcvars) {
-      $cmd = "`"$vcvars`" && cl /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib comdlg32.lib shell32.lib ole32.lib gdiplus.lib crypt32.lib"
+      $flags = Get-MsvcFlags $Profile
+      $clPart = ($flags.Cl + @($source, "/Fe:$exe", "/link") + $flags.Link + $libs) -join " "
+      $cmd = "`"$vcvars`" && cl $clPart"
       & cmd.exe /c $cmd
-      if ($LASTEXITCODE -eq 0) { exit 0 }
+      if ($LASTEXITCODE -eq 0) { Show-BinarySize; exit 0 }
     }
   }
 }
@@ -41,15 +99,18 @@ $fallbacks = @(
 )
 foreach ($vcvars in $fallbacks) {
   if (Test-Path $vcvars) {
-    $cmd = "`"$vcvars`" && cl /nologo /O1 /Os /GL /Gy /Gw /GF /MT /DNOMINMAX /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 $source /Fe:$exe /link /LTCG /OPT:REF /OPT:ICF winhttp.lib user32.lib gdi32.lib advapi32.lib comdlg32.lib shell32.lib ole32.lib gdiplus.lib crypt32.lib"
+    $flags = Get-MsvcFlags $Profile
+    $clPart = ($flags.Cl + @($source, "/Fe:$exe", "/link") + $flags.Link + $libs) -join " "
+    $cmd = "`"$vcvars`" && cl $clPart"
     & cmd.exe /c $cmd
-    if ($LASTEXITCODE -eq 0) { exit 0 }
+    if ($LASTEXITCODE -eq 0) { Show-BinarySize; exit 0 }
   }
 }
 
 $gxx = Find-Tool "g++.exe"
 if ($gxx) {
   & $gxx -Os -s -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 $source -o $exe -lwinhttp -lgdi32 -luser32 -ladvapi32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -lcrypt32
+  if ($LASTEXITCODE -eq 0) { Show-BinarySize }
   exit 0
 }
 
