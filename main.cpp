@@ -1,23 +1,17 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <commdlg.h>
 #include <winhttp.h>
 #include <shellapi.h>
-#include <shlobj.h>
 #include <shobjidl.h>
-#include <objidl.h>
 #include <gdiplus.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <process.h>
 #include <stdarg.h>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "advapi32.lib")
-#pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winhttp.lib")
@@ -245,6 +239,19 @@ static int TinyStrnicmp(const char *a, const char *b, size_t n) {
     return 0;
 }
 
+static int TinyStricmp(const char *a, const char *b) {
+    size_t i = 0;
+    if (!a) a = "";
+    if (!b) b = "";
+    for (;;) {
+        int ca = TinyToLowerA((unsigned char)a[i]);
+        int cb = TinyToLowerA((unsigned char)b[i]);
+        if (ca != cb) return ca - cb;
+        if (a[i] == 0) return 0;
+        ++i;
+    }
+}
+
 static int TinyWcsicmp(const wchar_t *a, const wchar_t *b) {
     size_t i = 0;
     if (!a) a = L"";
@@ -261,6 +268,7 @@ static int TinyWcsicmp(const wchar_t *a, const wchar_t *b) {
 #define snprintf TinySnprintf
 #define vsnprintf TinyVsnprintf
 #define swprintf TinySwprintf
+#define _stricmp TinyStricmp
 #define _strnicmp TinyStrnicmp
 #define _wcsicmp TinyWcsicmp
 
@@ -382,6 +390,7 @@ typedef struct AppConfig {
     char api_key[256];
     char model[128];
     char system_prompt[1024];
+    char quick_prompt[2048];
     char prompt_2[1024];
     char prompt_3[1024];
     char prompt_4[1024];
@@ -555,7 +564,7 @@ static void StartCaptureSelection(POINT anchor);
 static void CancelCaptureSelection(void);
 static int ConfirmCaptureSelection(POINT cursor, char *path, int path_size);
 static char *GetSelectedText(void);
-static unsigned __stdcall RequestThread(void *param);
+static DWORD WINAPI RequestThread(LPVOID param);
 static char *SendLLMRequest(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, RequestTiming *timing);
 static char *SendLLMRequestForTarget(const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, const LlmTargetConfig *target, RequestTiming *timing);
 static char *ExtractDeltaContent(const char *json);
@@ -637,11 +646,11 @@ static const char *ResolveRoutePromptText(int route_index) {
         return g_cfg.route_prompt_text[route_index];
     }
     if (route_index == 0) return g_cfg.system_prompt;
-    if (route_index == 1) return g_cfg.prompt_2;
-    if (route_index == 2) return g_cfg.prompt_3;
+    if (route_index == 1 && g_cfg.prompt_2[0]) return g_cfg.prompt_2;
+    if (route_index == 2 && g_cfg.prompt_3[0]) return g_cfg.prompt_3;
     if (route_index == 3 && g_cfg.prompt_4[0]) return g_cfg.prompt_4;
     if (route_index == 4 && g_cfg.prompt_5[0]) return g_cfg.prompt_5;
-    return g_cfg.prompt_3;
+    return g_cfg.system_prompt;
 }
 
 static const char *ResolveImageRoutePromptText(int image_index) {

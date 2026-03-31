@@ -7,18 +7,14 @@ static void CopyJoinedText(char *dst, size_t dst_size, const char *prefix, const
 
 static void ConfigDefaults(AppConfig *cfg) {
     static const char *kTwPrefix = "Reply in Traditional Chinese. ";
-    static const char *kTwPlainPrefix = "Reply in Traditional Chinese. Plain text only. ";
+    static const char *kQuickPrompt = "Test LLM prompt: please reply alive.";
     memset(cfg, 0, sizeof(*cfg));
     strcpy(cfg->endpoint, "");
     strcpy(cfg->api_key, "");
     strcpy(cfg->model, "");
     CopyJoinedText(cfg->system_prompt, sizeof(cfg->system_prompt), kTwPrefix,
                    "You are a strict exam-answering assistant. Determine question type first. If multiple-choice, output one answer per question with numbering, each on a new line, for example: 1. (A) 2. (B)(D). If non-multiple-choice, output concise direct answers with numbering, one line per question. The number of output lines must equal the number of questions; never omit any question. If information is insufficient or ambiguous, output 'insufficient information' for that item. Do not guess. Output final answers only.");
-    CopyJoinedText(cfg->prompt_2, sizeof(cfg->prompt_2), kTwPlainPrefix, "Give the answer first, then add a short and simple explanation.");
-    CopyJoinedText(cfg->prompt_3, sizeof(cfg->prompt_3), kTwPlainPrefix, "Give the answer first, then provide a detailed explanation with key reasoning and conclusion.");
-    CopyJoinedText(cfg->prompt_4, sizeof(cfg->prompt_4), kTwPlainPrefix, "Answer directly and keep it short.");
-    CopyJoinedText(cfg->prompt_5, sizeof(cfg->prompt_5), kTwPlainPrefix, "Answer first, then list concise key points.");
-    strcpy(cfg->user_template, "{{text}}");
+    strcpy(cfg->quick_prompt, kQuickPrompt);
     for (int i = 0; i < MAX_PROMPT_ROUTES; ++i) {
         cfg->route_prompt_endpoint[i][0] = 0;
         cfg->route_prompt_api_key[i][0] = 0;
@@ -261,7 +257,11 @@ static void LoadConfig(AppConfig *cfg) {
     GetPrivateProfileStringA("API", "endpoint", cfg->endpoint, cfg->endpoint, sizeof(cfg->endpoint), g_config_path);
     GetPrivateProfileStringA("API", "api_key", cfg->api_key, cfg->api_key, sizeof(cfg->api_key), g_config_path);
     GetPrivateProfileStringA("API", "model", cfg->model, cfg->model, sizeof(cfg->model), g_config_path);
-    GetPrivateProfileStringA("Prompt", "prompt_1", cfg->system_prompt, cfg->system_prompt, sizeof(cfg->system_prompt), g_config_path);
+    GetPrivateProfileStringA("Prompt", "prompt", cfg->system_prompt, cfg->system_prompt, sizeof(cfg->system_prompt), g_config_path);
+    if (!cfg->system_prompt[0]) {
+        GetPrivateProfileStringA("Prompt", "prompt_1", cfg->system_prompt, cfg->system_prompt, sizeof(cfg->system_prompt), g_config_path);
+    }
+    GetPrivateProfileStringA("Prompt", "quick_prompt", cfg->quick_prompt, cfg->quick_prompt, sizeof(cfg->quick_prompt), g_config_path);
     GetPrivateProfileStringA("Prompt", "prompt_2", cfg->prompt_2, cfg->prompt_2, sizeof(cfg->prompt_2), g_config_path);
     GetPrivateProfileStringA("Prompt", "prompt_3", cfg->prompt_3, cfg->prompt_3, sizeof(cfg->prompt_3), g_config_path);
     GetPrivateProfileStringA("Prompt", "prompt_4", cfg->prompt_4, cfg->prompt_4, sizeof(cfg->prompt_4), g_config_path);
@@ -305,10 +305,8 @@ static void LoadConfig(AppConfig *cfg) {
         UnescapeIniValue(cfg->route_image_prompt[i]);
         NormalizeFriendlyEndpointAlias(cfg->route_image_endpoint[i], (int)sizeof(cfg->route_image_endpoint[i]));
     }
-    cfg->model_route_count = GetPrivateProfileIntA("ModelRouter", "route_count", 0, g_config_path);
-    if (cfg->model_route_count < 0) cfg->model_route_count = 0;
-    if (cfg->model_route_count > MAX_MODEL_ROUTES) cfg->model_route_count = MAX_MODEL_ROUTES;
-    for (int i = 0; i < cfg->model_route_count; ++i) {
+    cfg->model_route_count = 0;
+    for (int i = 0; i < MAX_MODEL_ROUTES; ++i) {
         char key[64];
         snprintf(key, sizeof(key), "route_%d_kind", i + 1);
         cfg->model_route_kind[i] = GetPrivateProfileIntA("ModelRouter", key, 0, g_config_path) ? 1 : 0;
@@ -334,9 +332,9 @@ static void LoadConfig(AppConfig *cfg) {
             cfg->model_route_kind[i] = -1;
         }
     }
-    if (cfg->model_route_count > 0) {
+    {
         int w = 0;
-        for (int i = 0; i < cfg->model_route_count; ++i) {
+        for (int i = 0; i < MAX_MODEL_ROUTES; ++i) {
             if (cfg->model_route_kind[i] < 0) continue;
             if (w != i) {
                 cfg->model_route_kind[w] = cfg->model_route_kind[i];
@@ -441,63 +439,22 @@ static void SaveConfig(const AppConfig *cfg) {
 static void SaveBasicConfig(const AppConfig *cfg) {
     char tmp[16];
     char p1_esc[2048];
-    char p2_esc[2048];
-    char p3_esc[2048];
-    char p4_esc[2048];
-    char p5_esc[2048];
-    char tpl_esc[4096];
-    char ep_esc[1024];
-    char key_esc[512];
-    char model_esc[256];
+    char quick_esc[2048];
     WritePrivateProfileStringA("API", "endpoint", cfg->endpoint, g_config_path);
     WritePrivateProfileStringA("API", "api_key", cfg->api_key, g_config_path);
     WritePrivateProfileStringA("API", "model", cfg->model, g_config_path);
     EscapeIniValue(cfg->system_prompt, p1_esc, sizeof(p1_esc));
-    EscapeIniValue(cfg->prompt_2, p2_esc, sizeof(p2_esc));
-    EscapeIniValue(cfg->prompt_3, p3_esc, sizeof(p3_esc));
-    EscapeIniValue(cfg->prompt_4, p4_esc, sizeof(p4_esc));
-    EscapeIniValue(cfg->prompt_5, p5_esc, sizeof(p5_esc));
-    EscapeIniValue(cfg->user_template, tpl_esc, sizeof(tpl_esc));
-    WritePrivateProfileStringA("Prompt", "prompt_1", p1_esc, g_config_path);
-    WritePrivateProfileStringA("Prompt", "prompt_2", p2_esc, g_config_path);
-    WritePrivateProfileStringA("Prompt", "prompt_3", p3_esc, g_config_path);
-    WritePrivateProfileStringA("Prompt", "prompt_4", p4_esc, g_config_path);
-    WritePrivateProfileStringA("Prompt", "prompt_5", p5_esc, g_config_path);
+    EscapeIniValue(cfg->quick_prompt, quick_esc, sizeof(quick_esc));
+    WritePrivateProfileStringA("Prompt", "prompt", p1_esc, g_config_path);
+    WritePrivateProfileStringA("Prompt", "quick_prompt", quick_esc, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_1", NULL, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_2", NULL, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_3", NULL, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_4", NULL, g_config_path);
+    WritePrivateProfileStringA("Prompt", "prompt_5", NULL, g_config_path);
     WritePrivateProfileStringA("Prompt", "system", NULL, g_config_path);
-    WritePrivateProfileStringA("Prompt", "user_template", tpl_esc, g_config_path);
-    for (int i = 0; i < MAX_PROMPT_ROUTES; ++i) {
-        char key_name[64];
-        EscapeIniValue(cfg->route_prompt_endpoint[i], ep_esc, sizeof(ep_esc));
-        EscapeIniValue(cfg->route_prompt_api_key[i], key_esc, sizeof(key_esc));
-        EscapeIniValue(cfg->route_prompt_model[i], model_esc, sizeof(model_esc));
-        EscapeIniValue(cfg->route_prompt_text[i], p1_esc, sizeof(p1_esc));
-        snprintf(key_name, sizeof(key_name), "prompt_%d_endpoint", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, ep_esc, g_config_path);
-        snprintf(key_name, sizeof(key_name), "prompt_%d_api_key", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, key_esc, g_config_path);
-        snprintf(key_name, sizeof(key_name), "prompt_%d_model", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, model_esc, g_config_path);
-        snprintf(key_name, sizeof(key_name), "prompt_%d_prompt", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, p1_esc, g_config_path);
-    }
-    for (int i = 0; i < MAX_IMAGE_ROUTES; ++i) {
-        char key_name[64];
-        EscapeIniValue(cfg->route_image_endpoint[i], ep_esc, sizeof(ep_esc));
-        EscapeIniValue(cfg->route_image_api_key[i], key_esc, sizeof(key_esc));
-        EscapeIniValue(cfg->route_image_model[i], model_esc, sizeof(model_esc));
-        EscapeIniValue(cfg->route_image_prompt[i], p1_esc, sizeof(p1_esc));
-        snprintf(key_name, sizeof(key_name), "image_%d_endpoint", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, ep_esc, g_config_path);
-        snprintf(key_name, sizeof(key_name), "image_%d_api_key", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, key_esc, g_config_path);
-        snprintf(key_name, sizeof(key_name), "image_%d_model", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, model_esc, g_config_path);
-        snprintf(key_name, sizeof(key_name), "image_%d_prompt", i + 1);
-        WritePrivateProfileStringA("Routes", key_name, p1_esc, g_config_path);
-    }
-    WritePrivateProfileStringA("Routes", "image_endpoint", NULL, g_config_path);
-    WritePrivateProfileStringA("Routes", "image_api_key", NULL, g_config_path);
-    WritePrivateProfileStringA("Routes", "image_model", NULL, g_config_path);
+    WritePrivateProfileStringA("Prompt", "user_template", NULL, g_config_path);
+    WritePrivateProfileStringA("Routes", NULL, NULL, g_config_path);
     snprintf(tmp, sizeof(tmp), "%d", cfg->overlay_enabled);
     WritePrivateProfileStringA("UI", "overlay_enabled", tmp, g_config_path);
     snprintf(tmp, sizeof(tmp), "%d", cfg->overlay_visible);
@@ -532,55 +489,17 @@ static void SaveBasicConfig(const AppConfig *cfg) {
 static void SaveAdvancedConfig(const AppConfig *cfg) {
     char tmp[16];
     char rag_path_esc[2048];
-    char ep_esc[1024];
-    char key_esc[512];
-    char model_esc[256];
     char prompt_esc[2048];
     snprintf(tmp, sizeof(tmp), "%d", cfg->rag_enabled);
     WritePrivateProfileStringA("RAG", "enabled", tmp, g_config_path);
     EncodeIniUtf8Value(cfg->rag_source_path, rag_path_esc, sizeof(rag_path_esc));
     WritePrivateProfileStringA("RAG", "source_path", rag_path_esc, g_config_path);
-    snprintf(tmp, sizeof(tmp), "%d", cfg->ensemble_enabled);
-    WritePrivateProfileStringA("Ensemble", "enabled", tmp, g_config_path);
-    EscapeIniValue(cfg->ensemble_primary_endpoint, ep_esc, sizeof(ep_esc));
-    EscapeIniValue(cfg->ensemble_primary_api_key, key_esc, sizeof(key_esc));
-    EscapeIniValue(cfg->ensemble_primary_model, model_esc, sizeof(model_esc));
-    WritePrivateProfileStringA("Ensemble", "primary_endpoint", ep_esc, g_config_path);
-    WritePrivateProfileStringA("Ensemble", "primary_api_key", key_esc, g_config_path);
-    WritePrivateProfileStringA("Ensemble", "primary_model", model_esc, g_config_path);
-    snprintf(tmp, sizeof(tmp), "%d", cfg->ensemble_reviewer_count);
-    WritePrivateProfileStringA("Ensemble", "reviewer_count", tmp, g_config_path);
-    for (int i = 0; i < 3; ++i) {
-        char name[64];
-        snprintf(name, sizeof(name), "side_prompt_%d", i + 1);
-        WritePrivateProfileStringA("Ensemble", name, NULL, g_config_path);
-        snprintf(name, sizeof(name), "main_prompt_%d", i + 1);
-        EscapeIniValue(cfg->ensemble_main_prompt[i], prompt_esc, sizeof(prompt_esc));
-        WritePrivateProfileStringA("Ensemble", name, prompt_esc, g_config_path);
-    }
-    for (int i = 0; i < MAX_REVIEW_MODELS; ++i) {
-        char name[64];
-        if (i < cfg->ensemble_reviewer_count) {
-            EscapeIniValue(cfg->ensemble_reviewer_endpoint[i], ep_esc, sizeof(ep_esc));
-            EscapeIniValue(cfg->ensemble_reviewer_api_key[i], key_esc, sizeof(key_esc));
-            EscapeIniValue(cfg->ensemble_reviewer_model[i], model_esc, sizeof(model_esc));
-            snprintf(name, sizeof(name), "reviewer_%d_endpoint", i + 1);
-            WritePrivateProfileStringA("Ensemble", name, ep_esc, g_config_path);
-            snprintf(name, sizeof(name), "reviewer_%d_api_key", i + 1);
-            WritePrivateProfileStringA("Ensemble", name, key_esc, g_config_path);
-            snprintf(name, sizeof(name), "reviewer_%d_model", i + 1);
-            WritePrivateProfileStringA("Ensemble", name, model_esc, g_config_path);
-        } else {
-            snprintf(name, sizeof(name), "reviewer_%d_endpoint", i + 1);
-            WritePrivateProfileStringA("Ensemble", name, NULL, g_config_path);
-            snprintf(name, sizeof(name), "reviewer_%d_api_key", i + 1);
-            WritePrivateProfileStringA("Ensemble", name, NULL, g_config_path);
-            snprintf(name, sizeof(name), "reviewer_%d_model", i + 1);
-            WritePrivateProfileStringA("Ensemble", name, NULL, g_config_path);
-        }
-    }
+    WritePrivateProfileStringA("Ensemble", NULL, NULL, g_config_path);
     {
         int pruned_count = 0;
+        char ep_esc[1024];
+        char key_esc[512];
+        char model_esc[256];
         char ep_esc2[1024];
         char key_esc2[512];
         char model_esc2[256];

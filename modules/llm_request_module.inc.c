@@ -755,8 +755,8 @@ static void SanitizeAssistantOutput(char *text) {
 
 static int DetectPromptSlot(const char *system_prompt) {
     if (!system_prompt || !system_prompt[0]) return 0;
-    if (strcmp(system_prompt, g_cfg.prompt_2) == 0) return 1;
-    if (strcmp(system_prompt, g_cfg.prompt_3) == 0) return 2;
+    if (g_cfg.prompt_2[0] && strcmp(system_prompt, g_cfg.prompt_2) == 0) return 1;
+    if (g_cfg.prompt_3[0] && strcmp(system_prompt, g_cfg.prompt_3) == 0) return 2;
     return 0;
 }
 
@@ -798,7 +798,7 @@ static char *BuildUserMessage(const char *user_text, const char *region) {
     if (region && strcmp(region, "__RAW__") == 0) {
         return BuildRagUserMessage(user_text ? user_text : "");
     }
-    const char *tpl = g_cfg.user_template;
+    const char *tpl = g_cfg.user_template[0] ? g_cfg.user_template : "{{text}}";
     size_t out_cap = strlen(tpl) + (user_text ? strlen(user_text) : 0) + (region ? strlen(region) : 0) + 64;
     char *out = (char *)malloc(out_cap);
     if (!out) return NULL;
@@ -988,7 +988,7 @@ typedef struct EnsembleCallTask {
 
 static char *QueryEnsembleTarget(const LlmTargetConfig *target, const char *user_text, const char *region, const char *image_path, const char *system_prompt, int req_id, int *used_image, RequestTiming *timing, int recv_timeout_ms);
 
-static unsigned __stdcall EnsembleCallThread(void *param) {
+static DWORD WINAPI EnsembleCallThread(LPVOID param) {
     EnsembleCallTask *task = (EnsembleCallTask *)param;
     if (!task) return 0;
     task->answer = QueryEnsembleTarget(&task->target,
@@ -1110,7 +1110,7 @@ static char *RunEnsembleRequest(const char *user_text, const char *region, const
     tasks[task_count].req_id = req_id;
     tasks[task_count].recv_timeout_ms = side_timeout_ms;
     tasks[task_count].timing = timing;
-    handles[task_count] = (HANDLE)_beginthreadex(NULL, 0, EnsembleCallThread, &tasks[task_count], 0, NULL);
+    handles[task_count] = CreateThread(NULL, 0, EnsembleCallThread, &tasks[task_count], 0, NULL);
     task_count++;
 
     for (int i = 0; i < reviewer_active_count; ++i) {
@@ -1124,7 +1124,7 @@ static char *RunEnsembleRequest(const char *user_text, const char *region, const
         tasks[task_count].req_id = req_id;
         tasks[task_count].recv_timeout_ms = side_timeout_ms;
         tasks[task_count].timing = timing;
-        handles[task_count] = (HANDLE)_beginthreadex(NULL, 0, EnsembleCallThread, &tasks[task_count], 0, NULL);
+        handles[task_count] = CreateThread(NULL, 0, EnsembleCallThread, &tasks[task_count], 0, NULL);
         task_count++;
     }
 
@@ -1783,7 +1783,7 @@ static char *SendLLMRequest(const char *user_text, const char *region, const cha
     return SendLLMRequestForTarget(user_text, region, image_path, system_prompt, req_id, NULL, timing);
 }
 
-static unsigned __stdcall RequestThread(void *param) {
+static DWORD WINAPI RequestThread(LPVOID param) {
     RequestPayload *req = (RequestPayload *)param;
     RequestTiming timing;
     memset(&timing, 0, sizeof(timing));
@@ -1838,7 +1838,10 @@ static void StartRequestExTarget(const char *text, const char *region, const cha
     g_wait_dots = 1;
     ShowWaitingOverlay(anchor);
     SetTimer(g_hwnd_main, 1, 500, NULL);
-    _beginthreadex(NULL, 0, RequestThread, req, 0, NULL);
+    {
+        HANDLE h = CreateThread(NULL, 0, RequestThread, req, 0, NULL);
+        if (h) CloseHandle(h);
+    }
 }
 
 static void StartRequest(const char *text, const char *region, const char *image_path, POINT anchor, const char *system_prompt) {

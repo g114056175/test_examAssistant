@@ -79,24 +79,62 @@ static int IsModelRouteAllBlankAt(const AppConfig *cfg, int idx) {
            IsBlankText(cfg->model_route_hotkey[idx]);
 }
 
+static int IsModelRouteAllBlankSlot(const AppConfig *cfg, int idx) {
+    if (!cfg || idx < 0 || idx >= MAX_MODEL_ROUTES) return 1;
+    return IsBlankText(cfg->model_route_endpoint[idx]) &&
+           IsBlankText(cfg->model_route_api_key[idx]) &&
+           IsBlankText(cfg->model_route_model[idx]) &&
+           IsBlankText(cfg->model_route_prompt[idx]) &&
+           IsBlankText(cfg->model_route_hotkey[idx]);
+}
+
+static void CopyModelRouteSlot(AppConfig *cfg, int dst, int src) {
+    if (!cfg || dst < 0 || src < 0 || dst >= MAX_MODEL_ROUTES || src >= MAX_MODEL_ROUTES || dst == src) return;
+    cfg->model_route_kind[dst] = cfg->model_route_kind[src];
+    strcpy(cfg->model_route_endpoint[dst], cfg->model_route_endpoint[src]);
+    strcpy(cfg->model_route_api_key[dst], cfg->model_route_api_key[src]);
+    strcpy(cfg->model_route_model[dst], cfg->model_route_model[src]);
+    strcpy(cfg->model_route_prompt[dst], cfg->model_route_prompt[src]);
+    strcpy(cfg->model_route_hotkey[dst], cfg->model_route_hotkey[src]);
+}
+
+static void ClearModelRouteSlot(AppConfig *cfg, int idx) {
+    if (!cfg || idx < 0 || idx >= MAX_MODEL_ROUTES) return;
+    cfg->model_route_kind[idx] = 0;
+    cfg->model_route_endpoint[idx][0] = 0;
+    cfg->model_route_api_key[idx][0] = 0;
+    cfg->model_route_model[idx][0] = 0;
+    cfg->model_route_prompt[idx][0] = 0;
+    cfg->model_route_hotkey[idx][0] = 0;
+}
+
+static void CompactModelRoutes(AppConfig *cfg) {
+    int write_index = 0;
+    if (!cfg) return;
+    for (int read_index = 0; read_index < MAX_MODEL_ROUTES; ++read_index) {
+        if (IsModelRouteAllBlankSlot(cfg, read_index)) continue;
+        CopyModelRouteSlot(cfg, write_index, read_index);
+        ++write_index;
+    }
+    for (int i = write_index; i < MAX_MODEL_ROUTES; ++i) {
+        ClearModelRouteSlot(cfg, i);
+    }
+    cfg->model_route_count = write_index;
+}
+
 static void RemoveModelRouteAt(AppConfig *cfg, int idx) {
     if (!cfg || idx < 0 || idx >= cfg->model_route_count) return;
-    for (int i = idx; i + 1 < cfg->model_route_count; ++i) {
-        cfg->model_route_kind[i] = cfg->model_route_kind[i + 1];
-        strcpy(cfg->model_route_endpoint[i], cfg->model_route_endpoint[i + 1]);
-        strcpy(cfg->model_route_api_key[i], cfg->model_route_api_key[i + 1]);
-        strcpy(cfg->model_route_model[i], cfg->model_route_model[i + 1]);
-        strcpy(cfg->model_route_prompt[i], cfg->model_route_prompt[i + 1]);
-        strcpy(cfg->model_route_hotkey[i], cfg->model_route_hotkey[i + 1]);
+    if (idx + 1 < cfg->model_route_count) {
+        for (int i = idx; i + 1 < cfg->model_route_count; ++i) {
+            CopyModelRouteSlot(cfg, i, i + 1);
+        }
     }
     if (cfg->model_route_count > 0) cfg->model_route_count--;
+    ClearModelRouteSlot(cfg, cfg->model_route_count);
 }
 
 static void PruneBlankModelRoutes(AppConfig *cfg) {
-    if (!cfg) return;
-    for (int i = cfg->model_route_count - 1; i >= 0; --i) {
-        if (IsModelRouteAllBlankAt(cfg, i)) RemoveModelRouteAt(cfg, i);
-    }
+    CompactModelRoutes(cfg);
 }
 
 static void BuildRouteLabel(const AppConfig *cfg, int idx, char *out, int out_size) {
@@ -175,6 +213,7 @@ static void LoadModelRouteEditor(HWND hwnd) {
 
 static void SaveModelRouteEditor(HWND hwnd) {
     if (g_loading_controls || g_route_index < 0 || g_route_index >= g_cfg.model_route_count) return;
+    if (!GetDlgItem(hwnd, ID_EDIT_ROUTE_EP)) return;
 
     g_cfg.model_route_kind[g_route_index] = g_route_kind ? 1 : 0;
     GetDlgItemTextUtf8(hwnd, ID_EDIT_ROUTE_EP, g_cfg.model_route_endpoint[g_route_index], sizeof(g_cfg.model_route_endpoint[g_route_index]));
@@ -425,10 +464,12 @@ static void ApplyConfigToSettingsControls(HWND hwnd, const AppConfig *cfg) {
     LoadModelRouteEditor(hwnd);
 
     if (GetDlgItem(hwnd, ID_EDIT_PROMPT)) {
-        if (!g_quick_prompt_text[0]) {
+        if (cfg->quick_prompt[0]) {
+            strncpy(g_quick_prompt_text, cfg->quick_prompt, sizeof(g_quick_prompt_text) - 1);
+        } else {
             strncpy(g_quick_prompt_text, k_default_quick_prompt, sizeof(g_quick_prompt_text) - 1);
-            g_quick_prompt_text[sizeof(g_quick_prompt_text) - 1] = 0;
         }
+        g_quick_prompt_text[sizeof(g_quick_prompt_text) - 1] = 0;
         SetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, g_quick_prompt_text);
     }
     UpdateRagControlsEnabled(hwnd);
@@ -458,10 +499,14 @@ static void ApplyRuntimeConfigFromControls(HWND hwnd) {
     if (GetDlgItem(hwnd, 102)) GetDlgItemTextUtf8(hwnd, 102, g_cfg.api_key, sizeof(g_cfg.api_key));
     if (GetDlgItem(hwnd, 103)) GetDlgItemTextUtf8(hwnd, 103, g_cfg.model, sizeof(g_cfg.model));
     if (GetDlgItem(hwnd, 104)) GetDlgItemTextUtf8(hwnd, 104, g_cfg.system_prompt, sizeof(g_cfg.system_prompt));
+    if (GetDlgItem(hwnd, ID_EDIT_PROMPT)) {
+        GetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, g_quick_prompt_text, sizeof(g_quick_prompt_text));
+        strncpy(g_cfg.quick_prompt, g_quick_prompt_text[0] ? g_quick_prompt_text : k_default_quick_prompt, sizeof(g_cfg.quick_prompt) - 1);
+        g_cfg.quick_prompt[sizeof(g_cfg.quick_prompt) - 1] = 0;
+    }
     if (GetDlgItem(hwnd, ID_CHK_RAG_ENABLED)) g_cfg.rag_enabled = (IsDlgButtonChecked(hwnd, ID_CHK_RAG_ENABLED) == BST_CHECKED);
     if (GetDlgItem(hwnd, ID_EDIT_RAG_PATH)) GetDlgItemTextUtf8(hwnd, ID_EDIT_RAG_PATH, g_cfg.rag_source_path, sizeof(g_cfg.rag_source_path));
     SaveModelRouteEditor(hwnd);
-
     if (GetDlgItem(hwnd, 302)) g_cfg.overlay_visible = (IsDlgButtonChecked(hwnd, 302) == BST_CHECKED);
     if (GetDlgItem(hwnd, ID_CHK_STREAM)) g_cfg.stream = (IsDlgButtonChecked(hwnd, ID_CHK_STREAM) == BST_CHECKED);
     if (GetDlgItem(hwnd, 303)) {
@@ -992,6 +1037,9 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
 
         if (id == ID_EDIT_PROMPT && HIWORD(wparam) == EN_CHANGE) {
             GetDlgItemTextUtf8(hwnd, ID_EDIT_PROMPT, g_quick_prompt_text, sizeof(g_quick_prompt_text));
+            strncpy(g_cfg.quick_prompt, g_quick_prompt_text[0] ? g_quick_prompt_text : k_default_quick_prompt, sizeof(g_cfg.quick_prompt) - 1);
+            g_cfg.quick_prompt[sizeof(g_cfg.quick_prompt) - 1] = 0;
+            g_settings_dirty = 1;
             EnableWindow(GetDlgItem(hwnd, ID_BTN_ASK), !g_req_inflight && GetWindowTextLengthA(GetDlgItem(hwnd, ID_EDIT_PROMPT)) > 0);
             return 0;
         }
@@ -1011,16 +1059,18 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         if (id == ID_BTN_SAVE) {
             char hk_err[256];
             ApplyRuntimeConfigFromControls(hwnd);
-            SaveModelRouteEditor(hwnd);
-            PruneBlankModelRoutes(&g_cfg);
-            if (g_cfg.rag_enabled && !IsSupportedRagPathUtf8(g_cfg.rag_source_path)) {
-                MessageBoxA(hwnd, k_rag_validation_message, k_rag_validation_title, MB_OK | MB_ICONWARNING);
-                return 0;
-            }
             if (!ValidateHotkeyControls(hwnd, 0, NULL, hk_err, sizeof(hk_err))) { MessageBoxA(hwnd, hk_err, "Hotkey Validation", MB_OK | MB_ICONWARNING); return 0; }
-            if (!ValidateModelRouteHotkeys(hwnd, hk_err, sizeof(hk_err))) { MessageBoxA(hwnd, hk_err, "Hotkey Validation", MB_OK | MB_ICONWARNING); return 0; }
             if (MessageBoxA(hwnd, "Save settings to config.ini now?", "Confirm Save", MB_YESNO | MB_ICONQUESTION) != IDYES) return 0;
             ApplyRuntimeHotkeysFromControls(hwnd);
+            if (g_show_advanced) {
+                SaveModelRouteEditor(hwnd);
+                PruneBlankModelRoutes(&g_cfg);
+                if (g_cfg.rag_enabled && !IsSupportedRagPathUtf8(g_cfg.rag_source_path)) {
+                    MessageBoxA(hwnd, k_rag_validation_message, k_rag_validation_title, MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
+                if (!ValidateModelRouteHotkeys(hwnd, hk_err, sizeof(hk_err))) { MessageBoxA(hwnd, hk_err, "Hotkey Validation", MB_OK | MB_ICONWARNING); return 0; }
+            }
             SaveConfig(&g_cfg);
             g_settings_dirty = 0;
             LoadModelRouteEditor(hwnd);
@@ -1060,7 +1110,8 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
         if (id == ID_BTN_RESET) {
             if (MessageBoxA(hwnd, "Reset current settings to built-in defaults? This will not save to config.ini until you press Save.", "Confirm Reset", MB_YESNO | MB_ICONWARNING) == IDYES) {
                 ConfigDefaults(&g_cfg);
-                g_quick_prompt_text[0] = 0;
+                strncpy(g_quick_prompt_text, g_cfg.quick_prompt, sizeof(g_quick_prompt_text) - 1);
+                g_quick_prompt_text[sizeof(g_quick_prompt_text) - 1] = 0;
                 g_route_index = -1;
                 g_route_kind = 0;
                 ApplyConfigToSettingsControls(hwnd, &g_cfg);

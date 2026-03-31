@@ -2,6 +2,22 @@
 
 This file is for AI collaborators. Do not replace README.md (README is human-facing).
 
+## 2026-03-31 Current Config Rules
+
+- Save writes a minimal ini layout.
+- Basic persists:
+  - API endpoint, API key, model
+  - main Prompt
+  - Quick Prompt
+  - hotkeys and UI settings
+- Advanced persists:
+  - RAG enabled + source path
+  - Model Router entries
+- Legacy `prompt_2` to `prompt_5`, `user_template`, `[Routes]`, and `[Ensemble]` are backward-compatible read-only leftovers.
+- `prompt_1` is now stored as `prompt`.
+- Model Router routes are compacted on load/save so blank holes are removed and the list stays continuous.
+- Quick Prompt stays in runtime memory while editing, so switching tabs should not restore the default text.
+
 ## Project Summary
 
 - Small Win32 desktop helper for quick LLM calls.

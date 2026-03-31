@@ -1,4 +1,4 @@
-# Helper (v3)
+# Helper (v4)
 
 Lightweight Win32 desktop helper for quick LLM queries from selected text or a screenshot region.
 
@@ -26,22 +26,24 @@ Build profiles:
 .\llm_overlay.exe
 ```
 
-## What Changed In v3
+## What Changed In v4
 
-- Removed v2 multi-LLM merge runtime path.
-- Switched to single-model request flow.
-- Added Model Router in Advanced settings:
-	- Dynamic routes with add/remove (`+` / `-`), not fixed prompt/image slots.
-	- Each route can configure: `Type`, `Endpoint`, `API Key`, `Model Name`, `Prompt`, `Hotkey`.
-	- Blank routes are auto-pruned on save and when leaving Advanced.
-- Basic page now keeps only core hotkeys and core fields.
-- Settings persistence behavior:
-	- Only `Save` writes to `config.ini`.
-	- Changes without `Save` stay in runtime memory only.
-- Selection box behavior changed:
-	- Keeps updating while moving.
-	- Auto-hides only after staying still for about 2 seconds.
-- Closing the app is immediate (no unsaved prompt dialog).
+- Basic settings now persist only the live runtime fields used by the app:
+	- API `Endpoint`, `API Key`, `Model`, and main `Prompt`
+	- `Quick Prompt` for the Ask box
+	- Hotkeys and UI settings
+- Advanced settings now persist only the Advanced runtime data used by the app:
+	- RAG enable state and source path
+	- Model Router entries
+- Legacy prompt keys are kept only for backward-compatible loading:
+	- `prompt_1` is mapped to `prompt`
+	- `prompt_2` to `prompt_5` and `user_template` are ignored on save and cleared from new ini files
+- Legacy `[Routes]` and `[Ensemble]` data are not written by `Save` anymore.
+- Model Router entries are compacted automatically:
+	- Empty routes are removed on save or when leaving Advanced.
+	- Remaining routes are shifted forward so `route_1`, `route_2`, ... stay continuous.
+- Quick Prompt is kept in runtime memory while editing, so switching tabs does not reset it.
+- The old multi-LLM merge storage is no longer part of the saved config.
 
 ## Provider Support
 
@@ -77,11 +79,14 @@ Endpoint shortcuts in settings:
 ## Save Behavior
 
 - No `Save`: runtime only, not persisted to disk.
-- Press `Save`: writes full config to `config.ini`.
+- Press `Save` from Basic: writes the Basic runtime fields plus `Quick Prompt`, hotkeys, and UI settings.
+- Press `Save` from Advanced: also writes RAG and Model Router, then compacts blank routes.
+- Legacy `[Routes]` and `[Ensemble]` sections are cleared from the saved ini.
 
 ## Config Notes
 
-- `config.ini` stores API and UI settings.
+- `config.ini` now uses a minimal layout centered on `[API]`, `[Prompt]`, `[UI]`, `[Hotkeys]`, `[RAG]`, `[ModelRouter]`.
+- `Quick Prompt` is stored as `quick_prompt` under `[Prompt]`.
 - `config.ini` should remain local/private and is ignored by git.
 
 ## Reference Data (RAG-like)
@@ -101,3 +106,4 @@ Endpoint shortcuts in settings:
 - Overlay is click-through and non-activating.
 - Image requests are sent as PNG captures.
 - Reference Data support remains available in Advanced (`.txt` / `.md` only).
+- The old `[Ensemble]` save format is deprecated; it is only loaded for backward compatibility.
