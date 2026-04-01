@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $source = "main.cpp"
 $exe = $Output
 $libs = @(
-  "winhttp.lib", "user32.lib", "gdi32.lib", "advapi32.lib", "comdlg32.lib",
+  "winhttp.lib", "user32.lib", "gdi32.lib",
   "shell32.lib", "ole32.lib", "gdiplus.lib"
 )
 

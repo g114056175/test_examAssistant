@@ -513,7 +513,7 @@ static void ApplyRuntimeConfigFromControls(HWND hwnd) {
         GetWindowTextA(GetDlgItem(hwnd, 303), obuf, sizeof(obuf));
         {
             int op = ParsePositiveIntAscii(obuf);
-            g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 30, 255);
+            g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 5, 255);
         }
         if (g_hwnd_overlay) SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA);
     }
@@ -1005,7 +1005,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
             GetWindowTextA(GetDlgItem(hwnd, 303), obuf, sizeof(obuf));
             {
                 int op = ParsePositiveIntAscii(obuf);
-                g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 30, 255);
+                g_cfg.opacity = ClampInt(op >= 0 ? op : 0, 5, 255);
             }
             if (g_hwnd_overlay) { SetLayeredWindowAttributes(g_hwnd_overlay, 0, (BYTE)g_cfg.opacity, LWA_ALPHA); InvalidateRect(g_hwnd_overlay, NULL, TRUE); }
             g_settings_dirty = 1;
